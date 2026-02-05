@@ -38,37 +38,41 @@ export function useActiveFamily() {
         setLoading(true)
         setError(null)
 
-        const { data, error } = await supabase
-          .from('family_members')
-          .select('family_id, role, member_id, families(name)')
-          .eq('auth_user_id', session.user.id)
-          .eq('status', 'active')
+        try {
+          const { data, error } = await supabase
+            .from('family_members')
+            .select('family_id, role, member_id, families(name)')
+            .eq('auth_user_id', session.user.id)
+            .eq('status', 'active')
 
-        if (error) {
-          setError(error.message)
-          setFamilies([])
+          if (error) {
+            setError(error.message)
+            setFamilies([])
+            setLoading(false)
+            return
+          }
+
+          const opts: FamilyOption[] = (data ?? []).map((r: any) => ({
+            family_id: r.family_id,
+            role: r.role,
+            member_id: r.member_id,
+            name: r.families?.name ?? 'Familia'
+          }))
+
+          setFamilies(opts)
+
+          if (!activeFamilyId && opts.length > 0) {
+            setActiveFamilyId(opts[0].family_id)
+            localStorage.setItem(LS_KEY, opts[0].family_id)
+          } else if (activeFamilyId && !opts.some((o) => o.family_id === activeFamilyId) && opts.length > 0) {
+            setActiveFamilyId(opts[0].family_id)
+            localStorage.setItem(LS_KEY, opts[0].family_id)
+          }
+        } catch (e) {
+          console.error('Error loading families:', e)
+        } finally {
           setLoading(false)
-          return
         }
-
-        const opts: FamilyOption[] = (data ?? []).map((r: any) => ({
-          family_id: r.family_id,
-          role: r.role,
-          member_id: r.member_id,
-          name: r.families?.name ?? 'Familia'
-        }))
-
-        setFamilies(opts)
-
-        if (!activeFamilyId && opts.length > 0) {
-          setActiveFamilyId(opts[0].family_id)
-          localStorage.setItem(LS_KEY, opts[0].family_id)
-        } else if (activeFamilyId && !opts.some((o) => o.family_id === activeFamilyId) && opts.length > 0) {
-          setActiveFamilyId(opts[0].family_id)
-          localStorage.setItem(LS_KEY, opts[0].family_id)
-        }
-
-        setLoading(false)
       })()
   }, [session, activeFamilyId])
 
@@ -83,19 +87,24 @@ export function useActiveFamily() {
     if (!activeOpt) return
 
       ; (async () => {
-        const { data } = await supabase
-          .from('members')
-          .select('id, display_name, avatar_url')
-          .eq('id', activeOpt.member_id)
-          .single()
+        try {
+          // Robust query: no avatar_url
+          const { data, error } = await supabase
+            .from('members')
+            .select('id, display_name')
+            .eq('id', activeOpt.member_id)
+            .single()
 
-        if (data) {
-          setMyMember({
-            id: data.id,
-            display_name: data.display_name,
-            avatar_url: data.avatar_url,
-            role: activeOpt.role
-          })
+          if (!error && data) {
+            setMyMember({
+              id: data.id,
+              display_name: data.display_name,
+              avatar_url: null,
+              role: activeOpt.role
+            })
+          }
+        } catch (e) {
+          console.error('Error fetching myMember:', e)
         }
       })()
   }, [activeFamilyId, families, session])

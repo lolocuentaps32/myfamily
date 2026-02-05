@@ -12,14 +12,13 @@ type Message = {
     updated_at: string
     is_deleted: boolean
     sender_member_id: string
-    sender: { display_name: string; avatar_url: string | null } | null
+    sender: { display_name: string } | null
     reply_to: { id: string; content: string | null; sender: { display_name: string } | null } | null
 }
 
 type Member = {
     id: string
     display_name: string
-    avatar_url: string | null
 }
 
 export default function ChatPage() {
@@ -37,28 +36,34 @@ export default function ChatPage() {
     const inputRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior })
+        }
     }
 
     // Load messages
     const loadMessages = useCallback(async () => {
         if (!activeFamilyId) return
 
-        const { data: messagesData, error } = await supabase
-            .from('chat_messages')
-            .select(`
-                id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
-                sender:sender_member_id(display_name, avatar_url),
-                reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
-            `)
-            .eq('family_id', activeFamilyId)
-            .eq('is_deleted', false)
-            .order('created_at', { ascending: true })
-            .limit(100)
+        try {
+            const { data: messagesData, error } = await supabase
+                .from('chat_messages')
+                .select(`
+                    id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
+                    sender:sender_member_id(display_name),
+                    reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
+                `)
+                .eq('family_id', activeFamilyId)
+                .eq('is_deleted', false)
+                .order('created_at', { ascending: true })
+                .limit(100)
 
-        if (!error && messagesData) {
-            setMessages(messagesData as any)
+            if (!error && messagesData) {
+                setMessages(messagesData as any)
+            }
+        } catch (e) {
+            console.error('Error loading messages:', e)
         }
 
         setLoading(false)
@@ -68,13 +73,17 @@ export default function ChatPage() {
     const loadMembers = useCallback(async () => {
         if (!activeFamilyId) return
 
-        const { data } = await supabase
-            .from('members')
-            .select('id, display_name, avatar_url')
-            .eq('family_id', activeFamilyId)
+        try {
+            const { data } = await supabase
+                .from('members')
+                .select('id, display_name')
+                .eq('family_id', activeFamilyId)
 
-        if (data) {
-            setMembers(data)
+            if (data) {
+                setMembers(data as any)
+            }
+        } catch (e) {
+            console.error('Error loading members:', e)
         }
     }, [activeFamilyId])
 
@@ -98,38 +107,16 @@ export default function ChatPage() {
                 },
                 async (payload) => {
                     if (payload.eventType === 'INSERT') {
-                        const { data } = await supabase
-                            .from('chat_messages')
-                            .select(`
-                                id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
-                                sender:sender_member_id(display_name, avatar_url),
-                                reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
-                            `)
-                            .eq('id', payload.new.id)
-                            .single()
-
-                        if (data && !data.is_deleted) {
-                            setMessages(prev => [...prev, data as any])
-                        }
+                        // Refresh to get full sender info
+                        loadMessages()
                     } else if (payload.eventType === 'UPDATE') {
                         if (payload.new.is_deleted) {
                             setMessages(prev => prev.filter(m => m.id !== payload.new.id))
                         } else {
-                            // Refresh the updated message
-                            const { data } = await supabase
-                                .from('chat_messages')
-                                .select(`
-                                    id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
-                                    sender:sender_member_id(display_name, avatar_url),
-                                    reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
-                                `)
-                                .eq('id', payload.new.id)
-                                .single()
-
-                            if (data) {
-                                setMessages(prev => prev.map(m => m.id === data.id ? data as any : m))
-                            }
+                            loadMessages()
                         }
+                    } else if (payload.eventType === 'DELETE') {
+                        setMessages(prev => prev.filter(m => m.id !== payload.old.id))
                     }
                 }
             )
@@ -140,310 +127,290 @@ export default function ChatPage() {
         }
     }, [activeFamilyId, loadMessages, loadMembers])
 
-    // Scroll to bottom when messages change
+    // Auto-scroll when messages change
     useEffect(() => {
-        scrollToBottom()
-    }, [messages])
+        if (messages.length > 0) {
+            // Use 'auto' behavior for the first load to avoid jitter
+            const behavior = loading ? 'auto' : 'smooth'
+            scrollToBottom(behavior)
+        }
+    }, [messages, loading])
 
-    // Mark messages as read
+    // Mark as read
     useEffect(() => {
         if (!activeFamilyId || messages.length === 0) return
-
         const lastMessage = messages[messages.length - 1]
-        supabase.rpc('mark_messages_as_read', {
-            _family_id: activeFamilyId,
-            _message_id: lastMessage.id
-        }).catch(() => { })
-    }, [activeFamilyId, messages])
+        // Only run if message is not own
+        if (lastMessage.sender_member_id === myMember?.id) return
 
-    // Close message menu when clicking outside
-    useEffect(() => {
-        function handleClickOutside() {
-            setActiveMessageMenu(null)
+        try {
+            supabase.rpc('mark_messages_as_read', {
+                _family_id: activeFamilyId,
+                _message_id: lastMessage.id
+            })
+        } catch (e) {
+            // Ignore RPC errors
         }
-        document.addEventListener('click', handleClickOutside)
-        return () => document.removeEventListener('click', handleClickOutside)
-    }, [])
+    }, [activeFamilyId, messages, myMember])
 
     // Send or update message
     async function sendMessage(e?: React.FormEvent) {
         e?.preventDefault()
 
-        if (!newMessage.trim() || !activeFamilyId || !myMember || sending) return
+        if ((!newMessage.trim() && !editingMessage) || !activeFamilyId || !myMember || sending) return
 
+        const text = newMessage.trim()
         setSending(true)
 
-        if (editingMessage) {
-            // Update existing message
-            const { error } = await supabase
-                .from('chat_messages')
-                .update({ content: newMessage.trim(), updated_at: new Date().toISOString() })
-                .eq('id', editingMessage.id)
+        try {
+            if (editingMessage) {
+                // Update existing message
+                const { error } = await supabase
+                    .from('chat_messages')
+                    .update({ content: text, updated_at: new Date().toISOString() })
+                    .eq('id', editingMessage.id)
 
-            if (!error) {
-                setNewMessage('')
-                setEditingMessage(null)
-            }
-        } else {
-            // Create new message
-            const { error } = await supabase.from('chat_messages').insert({
-                family_id: activeFamilyId,
-                sender_member_id: myMember.id,
-                content: newMessage.trim(),
-                reply_to_id: replyTo?.id || null
-            })
+                if (!error) {
+                    setNewMessage('')
+                    setEditingMessage(null)
+                    // Local update for immediate feedback
+                    setMessages(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: text, updated_at: new Date().toISOString() } : m))
+                }
+            } else {
+                // Create new message
+                const { data, error } = await supabase.from('chat_messages').insert({
+                    family_id: activeFamilyId,
+                    sender_member_id: myMember.id,
+                    content: text,
+                    reply_to_id: replyTo?.id || null
+                }).select(`
+                    id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
+                    sender:sender_member_id(display_name),
+                    reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
+                `).single()
 
-            if (!error) {
-                setNewMessage('')
-                setReplyTo(null)
-                inputRef.current?.focus()
+                if (!error) {
+                    setNewMessage('')
+                    setReplyTo(null)
+                    inputRef.current?.focus()
+                    // Manual refresh if real-time lags
+                    if (data) {
+                        setMessages(prev => {
+                            if (prev.some(m => m.id === data.id)) return prev
+                            return [...prev, data as any]
+                        })
+                    }
+                } else {
+                    console.error('Error sending message:', error)
+                    alert('Error al enviar el mensaje. Por favor intenta de nuevo.')
+                }
             }
+        } catch (e) {
+            console.error('Exception sending message:', e)
+        } finally {
+            setSending(false)
         }
-
-        setSending(false)
     }
 
     // Delete message
     async function deleteMessage(msg: Message) {
-        await supabase
-            .from('chat_messages')
-            .update({ is_deleted: true })
-            .eq('id', msg.id)
-        setActiveMessageMenu(null)
+        if (!window.confirm('¿Eliminar este mensaje?')) return
+
+        try {
+            console.log('Attempting deletion for message:', msg.id, 'Family:', activeFamilyId)
+            const { data, error } = await supabase
+                .from('chat_messages')
+                .update({ is_deleted: true, updated_at: new Date().toISOString() })
+                .eq('id', msg.id)
+                .eq('family_id', activeFamilyId)
+                .select('id')
+
+            if (error) {
+                console.error('Supabase delete error:', error)
+                throw error
+            }
+
+            if (!data || data.length === 0) {
+                throw new Error('No tienes permisos para eliminar este mensaje o el mensaje ya no existe.')
+            }
+
+            setMessages(prev => prev.filter(m => m.id !== msg.id))
+            setActiveMessageMenu(null)
+        } catch (e: any) {
+            console.error('Exception in deleteMessage:', e)
+            alert(`Error al eliminar: ${e.message || 'Error desconocido'}. Revisa la consola para más detalles.`)
+        }
     }
 
-    // Start editing message
+    // Edit message
     function startEditing(msg: Message) {
         setEditingMessage(msg)
         setNewMessage(msg.content || '')
-        setReplyTo(null)
         setActiveMessageMenu(null)
         inputRef.current?.focus()
     }
 
-    // Cancel editing
     function cancelEditing() {
         setEditingMessage(null)
         setNewMessage('')
     }
 
     // Handle file upload
-    async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0]
         if (!file || !activeFamilyId || !myMember) return
 
         setSending(true)
+        try {
+            const fileExt = file.name.split('.').pop()
+            const fileName = `${activeFamilyId}/${Date.now()}.${fileExt}`
+            const mediaType = file.type.split('/')[0]
 
-        let mediaType = 'file'
-        if (file.type.startsWith('image/')) mediaType = 'image'
-        else if (file.type.startsWith('video/')) mediaType = 'video'
-        else if (file.type.startsWith('audio/')) mediaType = 'audio'
+            const { error: uploadError } = await supabase.storage
+                .from('family-media')
+                .upload(fileName, file)
 
-        const fileName = `${activeFamilyId}/${Date.now()}_${file.name}`
-        const { error: uploadError } = await supabase.storage
-            .from('family-media')
-            .upload(fileName, file)
+            if (uploadError) throw uploadError
 
-        if (uploadError) {
-            console.error('Upload error:', uploadError)
+            const { data: { publicUrl } } = supabase.storage
+                .from('family-media')
+                .getPublicUrl(fileName)
+
+            await supabase.from('chat_messages').insert({
+                family_id: activeFamilyId,
+                sender_member_id: myMember.id,
+                media_url: publicUrl,
+                media_type: mediaType,
+                content: ''
+            })
+
+            loadMessages()
+        } catch (err) {
+            console.error('Error uploading file:', err)
+        } finally {
             setSending(false)
-            return
-        }
-
-        const { data: urlData } = supabase.storage
-            .from('family-media')
-            .getPublicUrl(fileName)
-
-        await supabase.from('chat_messages').insert({
-            family_id: activeFamilyId,
-            sender_member_id: myMember.id,
-            content: null,
-            media_url: urlData.publicUrl,
-            media_type: mediaType,
-            reply_to_id: replyTo?.id || null
-        })
-
-        setReplyTo(null)
-        setSending(false)
-
-        if (fileInputRef.current) {
-            fileInputRef.current.value = ''
+            if (fileInputRef.current) fileInputRef.current.value = ''
         }
     }
 
-    function handleKeyDown(e: React.KeyboardEvent) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            sendMessage()
-        }
-        if (e.key === 'Escape' && editingMessage) {
-            cancelEditing()
-        }
+    // Grouping messages by date
+    const formatDate = (dateStr: string) => {
+        const date = new Date(dateStr)
+        const today = new Date()
+        const yesterday = new Date(today)
+        yesterday.setDate(yesterday.getDate() - 1)
+
+        if (date.toDateString() === today.toDateString()) return 'Hoy'
+        if (date.toDateString() === yesterday.toDateString()) return 'Ayer'
+        return date.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })
     }
 
-    function formatTime(iso: string) {
-        const date = new Date(iso)
-        const now = new Date()
-        const isToday = date.toDateString() === now.toDateString()
-
-        if (isToday) {
-            return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
-        }
-
-        return date.toLocaleDateString('es-ES', {
-            day: 'numeric',
-            month: 'short',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
+    const formatTime = (dateStr: string) => {
+        return new Date(dateStr).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
     }
 
-    function groupMessagesByDate(msgs: Message[]) {
-        const groups: { date: string; messages: Message[] }[] = []
-        let currentDate = ''
-
-        msgs.forEach(msg => {
-            const msgDate = new Date(msg.created_at).toDateString()
-            if (msgDate !== currentDate) {
-                currentDate = msgDate
-                groups.push({
-                    date: new Date(msg.created_at).toLocaleDateString('es-ES', {
-                        weekday: 'long',
-                        day: 'numeric',
-                        month: 'long'
-                    }),
-                    messages: [msg]
-                })
-            } else {
-                groups[groups.length - 1].messages.push(msg)
-            }
-        })
-
+    const messageGroups = messages.reduce((groups: { [key: string]: Message[] }, msg) => {
+        const date = new Date(msg.created_at).toDateString()
+        if (!groups[date]) groups[date] = []
+        groups[date].push(msg)
         return groups
-    }
+    }, {})
 
-    function toggleMessageMenu(e: React.MouseEvent, msgId: string) {
+    function toggleMessageMenu(e: React.MouseEvent, id: string) {
         e.stopPropagation()
-        setActiveMessageMenu(activeMessageMenu === msgId ? null : msgId)
+        setActiveMessageMenu(activeMessageMenu === id ? null : id)
     }
 
-    if (loading) {
-        return (
-            <div className="page chat-page">
-                <div className="loading-spinner">Cargando mensajes...</div>
-            </div>
-        )
+    if (loading && messages.length === 0) {
+        return <div className="loading">Cargando chat...</div>
     }
-
-    const messageGroups = groupMessagesByDate(messages)
 
     return (
-        <div className="page chat-page">
+        <div className="page chat-page" onClick={() => setActiveMessageMenu(null)}>
             {/* Chat Header */}
             <div className="chat-header">
-                <h2>💬 Chat Familiar</h2>
-                <span className="chat-members">{members.length} miembros</span>
+                <h2><span>💬</span> Chat Familiar</h2>
+                <div className="chat-header-actions">
+                    <span className="chat-members">{members.length || '?'} miembros</span>
+                </div>
             </div>
 
             {/* Messages Container */}
             <div className="chat-messages">
                 {messages.length === 0 ? (
                     <div className="empty-chat">
-                        <span className="empty-icon">💬</span>
-                        <p>¡Empieza la conversación!</p>
-                        <p className="empty-hint">Escribe un mensaje para tu familia</p>
+                        <span className="empty-icon">✨</span>
+                        <h3>¡Tu espacio familiar!</h3>
+                        <p className="empty-hint">Comparte momentos, fotos o simplemente di hola. Todos los miembros de tu familia verán los mensajes aquí.</p>
                     </div>
                 ) : (
-                    messageGroups.map((group, gi) => (
-                        <div key={gi} className="message-group">
+                    Object.entries(messageGroups).map(([date, msgs]) => (
+                        <div key={date} className="date-group">
                             <div className="date-divider">
-                                <span>{group.date}</span>
+                                <span>{formatDate(date)}</span>
                             </div>
-
-                            {group.messages.map((msg, mi) => {
+                            {msgs.map((msg, idx) => {
                                 const isOwn = msg.sender_member_id === myMember?.id
-                                const showAvatar = mi === 0 ||
-                                    group.messages[mi - 1].sender_member_id !== msg.sender_member_id
-                                const isEdited = msg.updated_at !== msg.created_at
+                                const showAvatar = idx === 0 || msgs[idx - 1].sender_member_id !== msg.sender_member_id
 
                                 return (
-                                    <div
-                                        key={msg.id}
-                                        className={`message ${isOwn ? 'own' : 'other'} ${showAvatar ? 'with-avatar' : ''}`}
-                                    >
-                                        {!isOwn && showAvatar && (
-                                            <div className="message-avatar">
-                                                {msg.sender?.avatar_url ? (
-                                                    <img src={msg.sender.avatar_url} alt="" />
-                                                ) : (
-                                                    <span>{msg.sender?.display_name?.charAt(0) || '?'}</span>
-                                                )}
-                                            </div>
-                                        )}
+                                    <div key={msg.id} className={`message ${isOwn ? 'own' : 'other'} ${showAvatar ? 'with-avatar' : ''}`}>
+                                        <div className="message-avatar">
+                                            {showAvatar ? (msg.sender?.display_name?.charAt(0) || '?') : ''}
+                                        </div>
 
                                         <div className="message-bubble">
-                                            {!isOwn && showAvatar && (
-                                                <span className="message-sender">{msg.sender?.display_name}</span>
-                                            )}
+                                            {!isOwn && <span className="message-sender">{msg.sender?.display_name || 'Miembro'}</span>}
+                                            {isOwn && <span className="message-sender self">Tú</span>}
 
                                             {msg.reply_to && (
                                                 <div className="message-reply-quote">
                                                     <span className="reply-sender">{msg.reply_to.sender?.display_name}</span>
-                                                    <span className="reply-content">{msg.reply_to.content?.slice(0, 50) || 'Media'}</span>
+                                                    <span className="reply-content">{msg.reply_to.content || 'Multimedia'}</span>
                                                 </div>
                                             )}
 
                                             {msg.media_url && (
                                                 <div className="message-media">
-                                                    {msg.media_type === 'image' && (
-                                                        <img src={msg.media_url} alt="" onClick={() => window.open(msg.media_url!, '_blank')} />
-                                                    )}
-                                                    {msg.media_type === 'video' && (
-                                                        <video src={msg.media_url} controls />
-                                                    )}
-                                                    {msg.media_type === 'audio' && (
-                                                        <audio src={msg.media_url} controls />
+                                                    {msg.media_type === 'image' ? (
+                                                        <img src={msg.media_url} alt="Shared media" onClick={() => window.open(msg.media_url!, '_blank')} />
+                                                    ) : (
+                                                        <a href={msg.media_url} target="_blank" rel="noreferrer">Ver archivo</a>
                                                     )}
                                                 </div>
                                             )}
 
-                                            {msg.content && (
-                                                <p className="message-text">{msg.content}</p>
-                                            )}
+                                            {msg.content && <p className="message-text">{msg.content}</p>}
+                                            <span className="message-time">{formatTime(msg.created_at)}</span>
 
-                                            <span className="message-time">
-                                                {isEdited && <span className="edited-label">editado · </span>}
-                                                {formatTime(msg.created_at)}
-                                            </span>
-                                        </div>
+                                            {/* Message Actions */}
+                                            <div className="message-actions">
+                                                <button
+                                                    className="message-action-btn"
+                                                    onClick={(e) => toggleMessageMenu(e, msg.id)}
+                                                    title="Opciones"
+                                                >
+                                                    {activeMessageMenu === msg.id ? '✕' : '⋯'}
+                                                </button>
 
-                                        {/* Message Actions */}
-                                        <div className="message-actions">
-                                            <button
-                                                className="message-action-btn"
-                                                onClick={(e) => toggleMessageMenu(e, msg.id)}
-                                                title="Opciones"
-                                            >
-                                                ⋮
-                                            </button>
-
-                                            {activeMessageMenu === msg.id && (
-                                                <div className="message-menu" onClick={e => e.stopPropagation()}>
-                                                    <button onClick={() => { setReplyTo(msg); setActiveMessageMenu(null) }}>
-                                                        ↩ Responder
-                                                    </button>
-                                                    {isOwn && msg.content && (
-                                                        <button onClick={() => startEditing(msg)}>
-                                                            ✏️ Editar
+                                                {activeMessageMenu === msg.id && (
+                                                    <div className="message-menu" onClick={e => e.stopPropagation()}>
+                                                        <button onClick={() => { setReplyTo(msg); setActiveMessageMenu(null) }}>
+                                                            <span>↩</span> Responder
                                                         </button>
-                                                    )}
-                                                    {isOwn && (
-                                                        <button className="danger" onClick={() => deleteMessage(msg)}>
-                                                            🗑️ Eliminar
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
+                                                        {isOwn && msg.content && (
+                                                            <button onClick={() => startEditing(msg)}>
+                                                                <span>✏️</span> Editar
+                                                            </button>
+                                                        )}
+                                                        {(isOwn || myMember?.role === 'owner' || myMember?.role === 'admin') && (
+                                                            <button className="danger" onClick={() => deleteMessage(msg)}>
+                                                                <span>🗑️</span> Eliminar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )
@@ -458,17 +425,12 @@ export default function ChatPage() {
             {(replyTo || editingMessage) && (
                 <div className={`input-preview ${editingMessage ? 'editing' : ''}`}>
                     <div className="preview-info">
-                        {editingMessage ? (
-                            <>
-                                <span className="preview-label">✏️ Editando mensaje</span>
-                                <span className="preview-text">{editingMessage.content?.slice(0, 50)}</span>
-                            </>
-                        ) : (
-                            <>
-                                <span className="preview-label">↩ Respondiendo a {replyTo?.sender?.display_name}</span>
-                                <span className="preview-text">{replyTo?.content?.slice(0, 50) || 'Media'}</span>
-                            </>
-                        )}
+                        <span className="preview-label">
+                            {editingMessage ? '✏️ Editando mensaje' : `↩ Respondiendo a ${replyTo?.sender?.display_name || 'Alguien'}`}
+                        </span>
+                        <span className="preview-text">
+                            {editingMessage ? editingMessage.content : (replyTo?.content || 'Contenido multimedia')}
+                        </span>
                     </div>
                     <button className="preview-cancel" onClick={() => {
                         if (editingMessage) cancelEditing()
@@ -479,40 +441,33 @@ export default function ChatPage() {
 
             {/* Input Area */}
             <form className="chat-input-area" onSubmit={sendMessage}>
+                <button type="button" className="chat-attach-btn" onClick={() => fileInputRef.current?.click()}>
+                    📎
+                </button>
                 <input
                     type="file"
                     ref={fileInputRef}
-                    onChange={handleFileSelect}
-                    accept="image/*,video/*,audio/*"
-                    hidden
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
                 />
-
-                {!editingMessage && (
-                    <button
-                        type="button"
-                        className="chat-attach-btn"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={sending}
-                    >
-                        📎
-                    </button>
-                )}
-
                 <textarea
                     ref={inputRef}
                     className="chat-input"
-                    placeholder={editingMessage ? "Editar mensaje..." : "Escribe un mensaje..."}
+                    placeholder="Escribe un mensaje..."
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyDown={handleKeyDown}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault()
+                            sendMessage()
+                        }
+                    }}
                     rows={1}
-                    disabled={sending}
                 />
-
                 <button
                     type="submit"
                     className="chat-send-btn"
-                    disabled={!newMessage.trim() || sending}
+                    disabled={(!newMessage.trim() && !editingMessage) || sending}
                 >
                     {sending ? '⏳' : editingMessage ? '✓' : '➤'}
                 </button>
