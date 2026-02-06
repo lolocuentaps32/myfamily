@@ -123,7 +123,7 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
         setErr(null)
         setMsg(null)
         try {
-            const { error } = await supabase.rpc('invite_family_member', {
+            const { error } = await supabase.rpc('invite_member_by_email', {
                 p_family_id: activeFamilyId,
                 p_email: inviteEmail.trim().toLowerCase(),
                 p_role: inviteRole,
