@@ -85,25 +85,41 @@ export default function TodayPage() {
         sort: 'starts_at'
       })
       setEvents(ev.items)
+    } catch (e: any) {
+      console.error('Events error:', e)
+    }
 
+    try {
       const ts = await pb.collection('tasks').getList<TaskRow>(1, 20, {
         filter: `family = "${activeFamilyId}" && status != "done" && status != "archived"`,
         sort: 'priority,due_at'
       })
       setTasks(ts.items)
+    } catch (e: any) {
+      console.error('Tasks error:', e)
+    }
 
+    try {
       const shopCount = await pb.collection('shopping_items').getList(1, 1, {
         filter: `family = "${activeFamilyId}" && status = "open"`,
         requestKey: 'shopCount'
       })
       setShoppingOpen(shopCount.totalItems)
+    } catch (e: any) {
+      console.error('Shopping error:', e)
+    }
 
+    try {
       const cCount = await pb.collection('event_conflicts').getList(1, 1, {
         filter: `family = "${activeFamilyId}" && overlap_start >= "${range.start}" && overlap_start < "${range.end}"`,
         requestKey: 'conflictsCount'
       })
       setConflicts(cCount.totalItems)
+    } catch (e: any) {
+      console.error('Conflicts error:', e)
+    }
 
+    try {
       const weekFromNow = toPBDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString())
       const billsData = await pb.collection('recurring_bills').getList<BillRow>(1, 10, {
         filter: `family = "${activeFamilyId}" && is_active = true && next_due_at <= "${weekFromNow}"`,
@@ -111,7 +127,7 @@ export default function TodayPage() {
       })
       setBills(billsData.items)
     } catch (e: any) {
-      setErr(e.message)
+      console.error('Bills error:', e)
     }
   }
 
