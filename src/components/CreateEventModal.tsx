@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { isoLocalToUtc } from '../lib/dateUtils'
 
 interface Props {
@@ -8,6 +8,10 @@ interface Props {
     onClose: () => void
     familyId: string | null
     onCreated?: () => void
+}
+
+function toPBDate(iso: string) {
+    return iso.replace('T', ' ').split('.')[0]
 }
 
 export default function CreateEventModal({ isOpen, onClose, familyId, onCreated }: Props) {
@@ -29,14 +33,14 @@ export default function CreateEventModal({ isOpen, onClose, familyId, onCreated 
         setErr(null)
         try {
             const startsAt = allDay
-                ? new Date(start + 'T00:00:00').toISOString()
-                : isoLocalToUtc(start)
+                ? toPBDate(new Date(start + 'T00:00:00').toISOString())
+                : toPBDate(isoLocalToUtc(start))
             const endsAt = allDay
-                ? new Date(start + 'T23:59:59').toISOString()
-                : isoLocalToUtc(end)
+                ? toPBDate(new Date(start + 'T23:59:59').toISOString())
+                : toPBDate(isoLocalToUtc(end))
 
-            const { error } = await supabase.from('events').insert({
-                family_id: familyId,
+            await pb.collection('events').create({
+                family: familyId,
                 title: title.trim(),
                 starts_at: startsAt,
                 ends_at: endsAt,
@@ -45,7 +49,6 @@ export default function CreateEventModal({ isOpen, onClose, familyId, onCreated 
                 status,
                 visibility: 'family'
             })
-            if (error) throw error
 
             // Reset
             setTitle('')

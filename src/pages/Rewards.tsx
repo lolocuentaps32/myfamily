@@ -1,5 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import './Rewards.css'
 
@@ -8,7 +7,9 @@ type PointRecord = {
     points: number
     reason: string
     created_at: string
-    created_by_member: { display_name: string } | null
+    expand?: {
+        created_by_member?: { display_name: string }
+    }
 }
 
 type Goal = {
@@ -36,22 +37,26 @@ type Redemption = {
     points_spent: number
     status: string
     created_at: string
-    reward_item: { title: string; icon: string } | null
+    expand?: {
+        reward_item?: { title: string; icon: string }
+    }
 }
 
 type FeedPost = {
     id: string
     content: string | null
-    media_urls: string[] | null
+    file: string | null
     created_at: string
-    author_member: { display_name: string; avatar_url: string | null } | null
-    reactions: { emoji: string; member_id: string }[]
+    expand?: {
+        author?: { display_name: string; avatar: string | null }
+        "feed_reactions(feed_item)"?: { emoji: string; member: string }[]
+    }
 }
 
 type Member = {
     id: string
     display_name: string
-    avatar_url: string | null
+    avatar: string | null
 }
 
 export default function RewardsPage() {
@@ -80,74 +85,73 @@ export default function RewardsPage() {
 
         try {
             // Load members
-            const { data: membersData } = await supabase
-                .from('members')
-                .select('id, display_name, avatar_url')
-                .eq('family_id', activeFamilyId)
-            if (membersData) setMembers(membersData)
+            const membersList = await pb.collection('members').getFullList<Member>({
+                filter: `id != ""`, // dummy to get all
+            })
+            // Actually, members should be filtered by family.
+            // Supabase used .eq('family_id', activeFamilyId) on members table?
+            // Wait, my members table has members... but families are linked via family_members.
+            const fmList = await pb.collection('family_members').getFullList({
+                filter: `family = "${activeFamilyId}"`,
+                expand: 'member'
+            })
+            const membersData = fmList.map((f: any) => ({
+                id: f.member,
+                display_name: f.expand?.member?.display_name ?? 'Miembro',
+                avatar: f.expand?.member?.avatar ?? null,
+                collectionId: f.expand?.member?.collectionId,
+                collectionName: f.expand?.member?.collectionName
+            }))
+            setMembers(membersData as any)
 
             // Load points for selected member
             if (viewingMemberId) {
-                const { data: pointsData } = await supabase
-                    .from('reward_points')
-                    .select('id, points, reason, created_at, created_by_member:created_by_member_id(display_name)')
-                    .eq('family_id', activeFamilyId)
-                    .eq('member_id', viewingMemberId)
-                    .order('created_at', { ascending: false })
-                    .limit(50)
-                if (pointsData) setPoints(pointsData as any)
-
-                // Calculate balance
-                const { data: balanceData } = await supabase.rpc('get_member_points_balance', {
-                    _family_id: activeFamilyId,
-                    _member_id: viewingMemberId
+                const pointsList = await pb.collection('reward_points').getList<any>(1, 50, {
+                    filter: `family = "${activeFamilyId}" && member = "${viewingMemberId}"`,
+                    sort: '-created_at',
+                    expand: 'created_by_member'
                 })
-                if (balanceData !== null) setBalance(balanceData)
+                setPoints(pointsList.items)
+
+                // Calculate balance manually
+                const allPoints = await pb.collection('reward_points').getFullList({
+                    filter: `family = "${activeFamilyId}" && member = "${viewingMemberId}"`
+                })
+                const total = allPoints.reduce((acc, p) => acc + (p.points || 0), 0)
+                setBalance(total)
             }
 
             // Load goals
-            const { data: goalsData } = await supabase
-                .from('reward_goals')
-                .select('*')
-                .eq('family_id', activeFamilyId)
-                .eq('is_active', true)
-                .order('title')
-            if (goalsData) setGoals(goalsData)
+            const goalsList = await pb.collection('reward_goals').getFullList<Goal>({
+                filter: `family = "${activeFamilyId}" && is_active = true`,
+                sort: 'title'
+            })
+            setGoals(goalsList)
 
             // Load reward items
-            const { data: itemsData } = await supabase
-                .from('reward_items')
-                .select('*')
-                .eq('family_id', activeFamilyId)
-                .eq('is_active', true)
-                .order('points_cost')
-            if (itemsData) setRewardItems(itemsData)
+            const itemsList = await pb.collection('reward_items').getFullList<RewardItem>({
+                filter: `family = "${activeFamilyId}" && is_active = true`,
+                sort: 'points_cost'
+            })
+            setRewardItems(itemsList)
 
             // Load redemptions
             if (viewingMemberId) {
-                const { data: redemptionsData } = await supabase
-                    .from('reward_redemptions')
-                    .select('id, points_spent, status, created_at, reward_item:reward_item_id(title, icon)')
-                    .eq('family_id', activeFamilyId)
-                    .eq('member_id', viewingMemberId)
-                    .order('created_at', { ascending: false })
-                    .limit(20)
-                if (redemptionsData) setRedemptions(redemptionsData as any)
+                const redemptionsList = await pb.collection('reward_redemptions').getList<any>(1, 20, {
+                    filter: `family = "${activeFamilyId}" && member = "${viewingMemberId}"`,
+                    sort: '-created_at',
+                    expand: 'reward_item'
+                })
+                setRedemptions(redemptionsList.items)
             }
 
             // Load feed
-            const { data: feedData } = await supabase
-                .from('family_feed')
-                .select(`
-          id, content, media_urls, created_at, is_pinned,
-          author_member:author_member_id(display_name, avatar_url),
-          reactions:feed_reactions(emoji, member_id)
-        `)
-                .eq('family_id', activeFamilyId)
-                .order('is_pinned', { ascending: false })
-                .order('created_at', { ascending: false })
-                .limit(30)
-            if (feedData) setFeed(feedData as any)
+            const feedList = await pb.collection('family_feed').getList<any>(1, 30, {
+                filter: `family = "${activeFamilyId}"`,
+                sort: '-is_pinned,-created_at',
+                expand: 'author,feed_reactions(feed_item)'
+            })
+            setFeed(feedList.items)
 
         } catch (err) {
             console.error('Error loading rewards data:', err)
@@ -164,24 +168,25 @@ export default function RewardsPage() {
     async function completeGoal(goal: Goal) {
         if (!activeFamilyId || !viewingMemberId) return
 
-        const { error } = await supabase.from('reward_points').insert({
-            family_id: activeFamilyId,
-            member_id: viewingMemberId,
-            points: goal.points,
-            reason: `Completado: ${goal.title}`,
-            goal_id: goal.id,
-            created_by_member_id: myMember?.id
-        })
+        try {
+            await pb.collection('reward_points').create({
+                family: activeFamilyId,
+                member: viewingMemberId,
+                points: goal.points,
+                reason: `Completado: ${goal.title}`,
+                goal: goal.id,
+                created_by_member: myMember?.id
+            })
 
-        if (!error) {
             // Create feed post
-            await supabase.from('family_feed').insert({
-                family_id: activeFamilyId,
-                author_member_id: viewingMemberId,
-                content: `🎉 ¡Completó "${goal.title}" y ganó ${goal.points} puntos!`,
-                related_goal_id: goal.id
+            await pb.collection('family_feed').create({
+                family: activeFamilyId,
+                author: viewingMemberId,
+                content: `🎉 ¡Completó "${goal.title}" y ganó ${goal.points} puntos!`
             })
             loadData()
+        } catch (err) {
+            console.error('Error completing goal:', err)
         }
     }
 
@@ -193,66 +198,79 @@ export default function RewardsPage() {
             return
         }
 
-        // Deduct points
-        const { error: pointsError } = await supabase.from('reward_points').insert({
-            family_id: activeFamilyId,
-            member_id: viewingMemberId,
-            points: -item.points_cost,
-            reason: `Canje: ${item.title}`,
-            created_by_member_id: myMember?.id
-        })
+        try {
+            // Deduct points (insert negative record)
+            await pb.collection('reward_points').create({
+                family: activeFamilyId,
+                member: viewingMemberId,
+                points: -item.points_cost,
+                reason: `Canje: ${item.title}`,
+                created_by_member: myMember?.id
+            })
 
-        if (pointsError) return
+            // Create redemption
+            await pb.collection('reward_redemptions').create({
+                family: activeFamilyId,
+                member: viewingMemberId,
+                reward_item: item.id,
+                points_spent: item.points_cost,
+                status: 'pending'
+            })
 
-        // Create redemption
-        const { error: redeemError } = await supabase.from('reward_redemptions').insert({
-            family_id: activeFamilyId,
-            member_id: viewingMemberId,
-            reward_item_id: item.id,
-            points_spent: item.points_cost,
-            status: 'pending'
-        })
-
-        if (!redeemError) {
-            await supabase.from('family_feed').insert({
-                family_id: activeFamilyId,
-                author_member_id: viewingMemberId,
+            await pb.collection('family_feed').create({
+                family: activeFamilyId,
+                author: viewingMemberId,
                 content: `🎁 ¡Canjeó "${item.title}" por ${item.points_cost} puntos!`
             })
             loadData()
+        } catch (err) {
+            console.error('Error redeeming reward:', err)
         }
     }
 
     // Approve redemption
     async function approveRedemption(redemption: Redemption, status: 'approved' | 'rejected') {
-        const { error } = await supabase
-            .from('reward_redemptions')
-            .update({
+        try {
+            await pb.collection('reward_redemptions').update(redemption.id, {
                 status,
-                approved_by_member_id: myMember?.id,
+                approved_by: myMember?.id,
                 approved_at: new Date().toISOString()
             })
-            .eq('id', redemption.id)
-
-        if (!error) loadData()
+            loadData()
+        } catch (err) {
+            console.error('Error approving redemption:', err)
+        }
     }
 
     // Add reaction to feed post
     async function toggleReaction(post: FeedPost, emoji: string) {
         if (!myMember) return
 
-        const existingReaction = post.reactions.find(r => r.member_id === myMember.id)
+        const reactions = post.expand?.['feed_reactions(feed_item)'] || []
+        const existingReaction = reactions.find(r => r.member === myMember.id && r.emoji === emoji)
 
-        if (existingReaction) {
-            await supabase.from('feed_reactions').delete().eq('feed_id', post.id).eq('member_id', myMember.id)
-        } else {
-            await supabase.from('feed_reactions').insert({
-                feed_id: post.id,
-                member_id: myMember.id,
-                emoji
-            })
+        try {
+            if (existingReaction) {
+                // PocketBase doesn't support easy delete by filter in SDK without ID
+                // I need the reaction ID. Let's fix type and expansion.
+                const fullPost = await pb.collection('family_feed').getOne(post.id, {
+                    expand: 'feed_reactions(feed_item)'
+                })
+                const rToDel = (fullPost.expand?.['feed_reactions(feed_item)'] || []).find((r: any) => r.member === myMember.id && r.emoji === emoji)
+                if (rToDel) {
+                    await pb.collection('feed_reactions').delete(rToDel.id)
+                }
+            } else {
+                await pb.collection('feed_reactions').create({
+                    feed_item: post.id,
+                    member: myMember.id,
+                    emoji
+                })
+            }
+            loadData()
+        } catch (err) {
+            console.error('Error toggling reaction:', err)
         }
-        loadData()
     }
 
     function formatDate(iso: string) {
@@ -336,7 +354,7 @@ export default function RewardsPage() {
                                             <div className="point-reason">{p.reason}</div>
                                             <div className="point-meta">
                                                 {formatDate(p.created_at)}
-                                                {p.created_by_member && ` • por ${p.created_by_member.display_name}`}
+                                                {p.expand?.created_by_member && ` • por ${p.expand.created_by_member.display_name}`}
                                             </div>
                                         </div>
                                     </div>
@@ -410,9 +428,9 @@ export default function RewardsPage() {
                                 <div className="redemptions-list">
                                     {redemptions.filter(r => r.status === 'pending').map(r => (
                                         <div key={r.id} className="redemption-card pending">
-                                            <span className="redemption-icon">{r.reward_item?.icon || '🎁'}</span>
+                                            <span className="redemption-icon">{r.expand?.reward_item?.icon || '🎁'}</span>
                                             <div className="redemption-info">
-                                                <div className="redemption-title">{r.reward_item?.title}</div>
+                                                <div className="redemption-title">{r.expand?.reward_item?.title}</div>
                                                 <div className="redemption-meta">{formatDate(r.created_at)}</div>
                                             </div>
                                             {isAdult && (
@@ -441,32 +459,31 @@ export default function RewardsPage() {
                                     <div key={post.id} className="feed-post">
                                         <div className="feed-author">
                                             <div className="feed-avatar">
-                                                {post.author_member?.avatar_url ? (
-                                                    <img src={post.author_member.avatar_url} alt="" />
+                                                {post.expand?.author?.avatar ? (
+                                                    <img src={pb.files.getUrl(post.expand.author as any, post.expand.author.avatar)} alt="" />
                                                 ) : (
                                                     '👤'
                                                 )}
                                             </div>
                                             <div className="feed-author-info">
-                                                <span className="feed-author-name">{post.author_member?.display_name || 'Familia'}</span>
+                                                <span className="feed-author-name">{post.expand?.author?.display_name || 'Familia'}</span>
                                                 <span className="feed-time">{formatDate(post.created_at)}</span>
                                             </div>
                                         </div>
 
                                         {post.content && <p className="feed-content">{post.content}</p>}
 
-                                        {post.media_urls && post.media_urls.length > 0 && (
+                                        {post.file && (
                                             <div className="feed-media">
-                                                {post.media_urls.map((url, i) => (
-                                                    <img key={i} src={url} alt="" className="feed-image" />
-                                                ))}
+                                                <img src={pb.files.getUrl(post, post.file)} alt="" className="feed-image" />
                                             </div>
                                         )}
 
                                         <div className="feed-reactions">
                                             {['❤️', '👏', '🎉', '⭐'].map(emoji => {
-                                                const count = post.reactions.filter(r => r.emoji === emoji).length
-                                                const myReaction = post.reactions.find(r => r.member_id === myMember?.id && r.emoji === emoji)
+                                                const postReactions = post.expand?.['feed_reactions(feed_item)'] || []
+                                                const count = postReactions.filter(r => r.emoji === emoji).length
+                                                const myReaction = postReactions.find(r => r.member === myMember?.id && r.emoji === emoji)
                                                 return (
                                                     <button
                                                         key={emoji}

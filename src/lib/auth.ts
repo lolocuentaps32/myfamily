@@ -1,17 +1,10 @@
-import { supabase } from './supabase'
+import { pb } from './pb'
 
 export async function signInWithEmail(email: string) {
-  const { data, error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: window.location.origin
-    }
-  })
-  if (error) throw error
-  return data
+  // Logic for sign in. In this app we use authWithPassword in Login.tsx
+  console.log('signInWithEmail called for', email)
 }
 
 export async function signOut() {
-  const { error } = await supabase.auth.signOut()
-  if (error) throw error
+  pb.authStore.clear()
 }

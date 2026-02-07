@@ -1,5 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import './Chat.css'
 
@@ -8,12 +7,16 @@ type Message = {
     content: string | null
     media_url: string | null
     media_type: string | null
+    file: string | null
     created_at: string
     updated_at: string
     is_deleted: boolean
-    sender_member_id: string
-    sender: { display_name: string } | null
-    reply_to: { id: string; content: string | null; sender: { display_name: string } | null } | null
+    sender: string
+    expand?: {
+        sender?: { display_name: string }
+        reply_to?: { id: string; content: string | null; expand?: { sender?: { display_name: string } } }
+    }
+    reply_to?: string
 }
 
 type Member = {
@@ -47,21 +50,12 @@ export default function ChatPage() {
         if (!activeFamilyId) return
 
         try {
-            const { data: messagesData, error } = await supabase
-                .from('chat_messages')
-                .select(`
-                    id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
-                    sender:sender_member_id(display_name),
-                    reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
-                `)
-                .eq('family_id', activeFamilyId)
-                .eq('is_deleted', false)
-                .order('created_at', { ascending: true })
-                .limit(100)
-
-            if (!error && messagesData) {
-                setMessages(messagesData as any)
-            }
+            const records = await pb.collection('chat_messages').getList<any>(1, 100, {
+                filter: `family = "${activeFamilyId}" && is_deleted = false`,
+                sort: 'created_at',
+                expand: 'sender,reply_to,reply_to.sender'
+            })
+            setMessages(records.items)
         } catch (e) {
             console.error('Error loading messages:', e)
         }
@@ -69,19 +63,19 @@ export default function ChatPage() {
         setLoading(false)
     }, [activeFamilyId])
 
-    // Load members directly from members table
+    // Load members
     const loadMembers = useCallback(async () => {
         if (!activeFamilyId) return
 
         try {
-            const { data } = await supabase
-                .from('members')
-                .select('id, display_name')
-                .eq('family_id', activeFamilyId)
-
-            if (data) {
-                setMembers(data as any)
-            }
+            const records = await pb.collection('family_members').getFullList({
+                filter: `family = "${activeFamilyId}"`,
+                expand: 'member'
+            })
+            setMembers(records.map((r: any) => ({
+                id: r.member,
+                display_name: r.expand?.member?.display_name ?? 'Miembro'
+            })))
         } catch (e) {
             console.error('Error loading members:', e)
         }
@@ -94,36 +88,23 @@ export default function ChatPage() {
         loadMembers()
         loadMessages()
 
-        // Subscribe to messages
-        const channel = supabase
-            .channel(`chat:${activeFamilyId}`)
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'chat_messages',
-                    filter: `family_id=eq.${activeFamilyId}`
-                },
-                async (payload) => {
-                    if (payload.eventType === 'INSERT') {
-                        // Refresh to get full sender info
-                        loadMessages()
-                    } else if (payload.eventType === 'UPDATE') {
-                        if (payload.new.is_deleted) {
-                            setMessages(prev => prev.filter(m => m.id !== payload.new.id))
-                        } else {
-                            loadMessages()
-                        }
-                    } else if (payload.eventType === 'DELETE') {
-                        setMessages(prev => prev.filter(m => m.id !== payload.old.id))
-                    }
+        // Subscribe
+        pb.collection('chat_messages').subscribe('*', (e) => {
+            if (e.action === 'create') {
+                loadMessages()
+            } else if (e.action === 'update') {
+                if (e.record.is_deleted) {
+                    setMessages(prev => prev.filter(m => m.id !== e.record.id))
+                } else {
+                    loadMessages()
                 }
-            )
-            .subscribe()
+            } else if (e.action === 'delete') {
+                setMessages(prev => prev.filter(m => m.id !== e.record.id))
+            }
+        }, { filter: `family = "${activeFamilyId}"` })
 
         return () => {
-            supabase.removeChannel(channel)
+            pb.collection('chat_messages').unsubscribe('*')
         }
     }, [activeFamilyId, loadMessages, loadMembers])
 
@@ -135,23 +116,6 @@ export default function ChatPage() {
             scrollToBottom(behavior)
         }
     }, [messages, loading])
-
-    // Mark as read
-    useEffect(() => {
-        if (!activeFamilyId || messages.length === 0) return
-        const lastMessage = messages[messages.length - 1]
-        // Only run if message is not own
-        if (lastMessage.sender_member_id === myMember?.id) return
-
-        try {
-            supabase.rpc('mark_messages_as_read', {
-                _family_id: activeFamilyId,
-                _message_id: lastMessage.id
-            })
-        } catch (e) {
-            // Ignore RPC errors
-        }
-    }, [activeFamilyId, messages, myMember])
 
     // Send or update message
     async function sendMessage(e?: React.FormEvent) {
@@ -165,45 +129,24 @@ export default function ChatPage() {
         try {
             if (editingMessage) {
                 // Update existing message
-                const { error } = await supabase
-                    .from('chat_messages')
-                    .update({ content: text, updated_at: new Date().toISOString() })
-                    .eq('id', editingMessage.id)
-
-                if (!error) {
-                    setNewMessage('')
-                    setEditingMessage(null)
-                    // Local update for immediate feedback
-                    setMessages(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: text, updated_at: new Date().toISOString() } : m))
-                }
+                await pb.collection('chat_messages').update(editingMessage.id, {
+                    content: text
+                })
+                setNewMessage('')
+                setEditingMessage(null)
+                loadMessages()
             } else {
                 // Create new message
-                const { data, error } = await supabase.from('chat_messages').insert({
-                    family_id: activeFamilyId,
-                    sender_member_id: myMember.id,
+                await pb.collection('chat_messages').create({
+                    family: activeFamilyId,
+                    sender: myMember.id,
                     content: text,
-                    reply_to_id: replyTo?.id || null
-                }).select(`
-                    id, content, media_url, media_type, created_at, updated_at, is_deleted, sender_member_id,
-                    sender:sender_member_id(display_name),
-                    reply_to:reply_to_id(id, content, sender:sender_member_id(display_name))
-                `).single()
-
-                if (!error) {
-                    setNewMessage('')
-                    setReplyTo(null)
-                    inputRef.current?.focus()
-                    // Manual refresh if real-time lags
-                    if (data) {
-                        setMessages(prev => {
-                            if (prev.some(m => m.id === data.id)) return prev
-                            return [...prev, data as any]
-                        })
-                    }
-                } else {
-                    console.error('Error sending message:', error)
-                    alert('Error al enviar el mensaje. Por favor intenta de nuevo.')
-                }
+                    reply_to: replyTo?.id || null
+                })
+                setNewMessage('')
+                setReplyTo(null)
+                inputRef.current?.focus()
+                loadMessages()
             }
         } catch (e) {
             console.error('Exception sending message:', e)
@@ -217,28 +160,14 @@ export default function ChatPage() {
         if (!window.confirm('¿Eliminar este mensaje?')) return
 
         try {
-            console.log('Attempting deletion for message:', msg.id, 'Family:', activeFamilyId)
-            const { data, error } = await supabase
-                .from('chat_messages')
-                .update({ is_deleted: true, updated_at: new Date().toISOString() })
-                .eq('id', msg.id)
-                .eq('family_id', activeFamilyId)
-                .select('id')
-
-            if (error) {
-                console.error('Supabase delete error:', error)
-                throw error
-            }
-
-            if (!data || data.length === 0) {
-                throw new Error('No tienes permisos para eliminar este mensaje o el mensaje ya no existe.')
-            }
-
+            await pb.collection('chat_messages').update(msg.id, {
+                is_deleted: true
+            })
             setMessages(prev => prev.filter(m => m.id !== msg.id))
             setActiveMessageMenu(null)
         } catch (e: any) {
             console.error('Exception in deleteMessage:', e)
-            alert(`Error al eliminar: ${e.message || 'Error desconocido'}. Revisa la consola para más detalles.`)
+            alert(`Error al eliminar: ${e.message || 'Error desconocido'}.`)
         }
     }
 
@@ -262,28 +191,15 @@ export default function ChatPage() {
 
         setSending(true)
         try {
-            const fileExt = file.name.split('.').pop()
-            const fileName = `${activeFamilyId}/${Date.now()}.${fileExt}`
             const mediaType = file.type.split('/')[0]
+            const formData = new FormData()
+            formData.append('family', activeFamilyId)
+            formData.append('sender', myMember.id)
+            formData.append('file', file)
+            formData.append('media_type', mediaType)
+            formData.append('content', '')
 
-            const { error: uploadError } = await supabase.storage
-                .from('family-media')
-                .upload(fileName, file)
-
-            if (uploadError) throw uploadError
-
-            const { data: { publicUrl } } = supabase.storage
-                .from('family-media')
-                .getPublicUrl(fileName)
-
-            await supabase.from('chat_messages').insert({
-                family_id: activeFamilyId,
-                sender_member_id: myMember.id,
-                media_url: publicUrl,
-                media_type: mediaType,
-                content: ''
-            })
-
+            await pb.collection('chat_messages').create(formData)
             loadMessages()
         } catch (err) {
             console.error('Error uploading file:', err)
@@ -356,26 +272,26 @@ export default function ChatPage() {
                                 return (
                                     <div key={msg.id} className={`message ${isOwn ? 'own' : 'other'} ${showAvatar ? 'with-avatar' : ''}`}>
                                         <div className="message-avatar">
-                                            {showAvatar ? (msg.sender?.display_name?.charAt(0) || '?') : ''}
+                                            {showAvatar ? (msg.expand?.sender?.display_name?.charAt(0) || '?') : ''}
                                         </div>
 
                                         <div className="message-bubble">
-                                            {!isOwn && <span className="message-sender">{msg.sender?.display_name || 'Miembro'}</span>}
+                                            {!isOwn && <span className="message-sender">{msg.expand?.sender?.display_name || 'Miembro'}</span>}
                                             {isOwn && <span className="message-sender self">Tú</span>}
 
-                                            {msg.reply_to && (
+                                            {msg.reply_to && msg.expand?.reply_to && (
                                                 <div className="message-reply-quote">
-                                                    <span className="reply-sender">{msg.reply_to.sender?.display_name}</span>
-                                                    <span className="reply-content">{msg.reply_to.content || 'Multimedia'}</span>
+                                                    <span className="reply-sender">{msg.expand.reply_to.expand?.sender?.display_name}</span>
+                                                    <span className="reply-content">{msg.expand.reply_to.content || 'Multimedia'}</span>
                                                 </div>
                                             )}
 
-                                            {msg.media_url && (
+                                            {msg.file && (
                                                 <div className="message-media">
                                                     {msg.media_type === 'image' ? (
-                                                        <img src={msg.media_url} alt="Shared media" onClick={() => window.open(msg.media_url!, '_blank')} />
+                                                        <img src={pb.files.getUrl(msg, msg.file)} alt="Shared media" onClick={() => window.open(pb.files.getUrl(msg, msg.file), '_blank')} />
                                                     ) : (
-                                                        <a href={msg.media_url} target="_blank" rel="noreferrer">Ver archivo</a>
+                                                        <a href={pb.files.getUrl(msg, msg.file)} target="_blank" rel="noreferrer">Ver archivo</a>
                                                     )}
                                                 </div>
                                             )}
@@ -426,7 +342,7 @@ export default function ChatPage() {
                 <div className={`input-preview ${editingMessage ? 'editing' : ''}`}>
                     <div className="preview-info">
                         <span className="preview-label">
-                            {editingMessage ? '✏️ Editando mensaje' : `↩ Respondiendo a ${replyTo?.sender?.display_name || 'Alguien'}`}
+                            {editingMessage ? '✏️ Editando mensaje' : `↩ Respondiendo a ${replyTo?.expand?.sender?.display_name || 'Alguien'}`}
                         </span>
                         <span className="preview-text">
                             {editingMessage ? editingMessage.content : (replyTo?.content || 'Contenido multimedia')}

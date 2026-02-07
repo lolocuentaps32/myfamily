@@ -1,21 +1,8 @@
 import { useState, useEffect } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import { useSession } from '../lib/useSession'
-
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY
-
-function urlBase64ToUint8Array(base64String: string) {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4)
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-    const rawData = window.atob(base64)
-    const outputArray = new Uint8Array(rawData.length)
-    for (let i = 0; i < rawData.length; ++i) {
-        outputArray[i] = rawData.charCodeAt(i)
-    }
-    return outputArray
-}
 
 type MemberRow = {
     member_id: string
@@ -57,33 +44,36 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
     async function loadMembers() {
         if (!activeFamilyId) return
         try {
-            const { data, error } = await supabase.rpc('list_family_members', { p_family_id: activeFamilyId })
-            if (!error) setMembers(Array.isArray(data) ? data : [])
+            const records = await pb.collection('family_members').getFullList({
+                filter: `family = "${activeFamilyId}"`,
+                expand: 'member'
+            })
+            setMembers(records.map((r: any) => ({
+                member_id: r.member,
+                display_name: r.expand?.member?.display_name ?? 'Miembro',
+                role: r.role,
+                status: r.status,
+                auth_email: r.expand?.member?.email ?? ''
+            })))
         } catch { setMembers([]) }
     }
 
     async function loadPendingInvitations() {
-        if (!session) return
-        const { data, error } = await supabase
-            .from('family_members')
-            .select('family_id, families(name)')
-            .eq('auth_user_id', session.user.id)
-            .eq('status', 'invited')
-        if (!error && data) {
-            setPendingInvitations(data.map((r: any) => ({
-                family_id: r.family_id,
-                family_name: r.families?.name ?? 'Familia'
+        if (!pb.authStore.model?.id) return
+        try {
+            // Buscamos si el usuario actual tiene el email de alguna invitación
+            const userEmail = pb.authStore.model.email
+            const records = await pb.collection('family_members').getFullList({
+                filter: `status = "invited" && expand.member.email = "${userEmail}"`,
+                expand: 'family'
+            })
+            setPendingInvitations(records.map((r: any) => ({
+                family_id: r.family,
+                family_name: r.expand?.family?.name ?? 'Familia'
             })))
-        }
-    }
-
-    async function checkPushStatus() {
-        if ('serviceWorker' in navigator && 'PushManager' in window) {
-            try {
-                const reg = await navigator.serviceWorker.ready
-                const sub = await reg.pushManager.getSubscription()
-                setPushEnabled(!!sub)
-            } catch { setPushEnabled(false) }
+        } catch (e) {
+            console.error(e)
+            setPendingInvitations([])
         }
     }
 
@@ -91,7 +81,6 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
         if (isOpen) {
             loadMembers()
             loadPendingInvitations()
-            checkPushStatus()
         }
     }, [isOpen, activeFamilyId])
 
@@ -101,11 +90,30 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
         setErr(null)
         setMsg(null)
         try {
-            const { error } = await supabase.rpc('create_family_with_owner', {
-                p_name: newFamilyName.trim(),
-                p_display_name: displayName.trim() || null
+            // 1. Create family
+            const family = await pb.collection('families').create({
+                name: newFamilyName.trim()
             })
-            if (error) throw error
+
+            // 2. Find or create member for current user
+            let member;
+            try {
+                member = await pb.collection('members').getFirstListItem(`email="${pb.authStore.model?.email}"`)
+            } catch {
+                member = await pb.collection('members').create({
+                    email: pb.authStore.model?.email,
+                    display_name: displayName.trim() || pb.authStore.model?.email?.split('@')[0] || 'Yo'
+                })
+            }
+
+            // 3. Create family_member as owner
+            await pb.collection('family_members').create({
+                family: family.id,
+                member: member.id,
+                role: 'owner',
+                status: 'active'
+            })
+
             setMsg('¡Familia creada! 🎉')
             setNewFamilyName('')
             setDisplayName('')
@@ -123,14 +131,27 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
         setErr(null)
         setMsg(null)
         try {
-            const { error } = await supabase.rpc('invite_member_by_email', {
-                p_family_id: activeFamilyId,
-                p_email: inviteEmail.trim().toLowerCase(),
-                p_role: inviteRole,
-                p_display_name: inviteDisplayName.trim() || null,
-                p_gender: inviteGender || null
+            // 1. Find or create member
+            let member;
+            const emailEnc = inviteEmail.trim().toLowerCase()
+            try {
+                member = await pb.collection('members').getFirstListItem(`email="${emailEnc}"`)
+            } catch {
+                member = await pb.collection('members').create({
+                    email: emailEnc,
+                    display_name: inviteDisplayName.trim() || emailEnc.split('@')[0],
+                    gender: inviteGender || null
+                })
+            }
+
+            // 2. Create family_member link
+            await pb.collection('family_members').create({
+                family: activeFamilyId,
+                member: member.id,
+                role: inviteRole,
+                status: 'invited'
             })
-            if (error) throw error
+
             setMsg(`¡Invitación enviada a ${inviteEmail}! 📨`)
             setInviteEmail('')
             setInviteDisplayName('')
@@ -144,55 +165,25 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
     }
 
     async function acceptInvitation(familyId: string) {
-        const { error } = await supabase.rpc('accept_family_invitation', { p_family_id: familyId })
-        if (error) setErr(error.message)
-        else {
+        try {
+            const userEmail = pb.authStore.model?.email
+            if (!userEmail) throw new Error('No user email')
+
+            const member = await pb.collection('members').getFirstListItem(`email="${userEmail}"`)
+            const link = await pb.collection('family_members').getFirstListItem(`family="${familyId}" && member="${member.id}"`)
+
+            await pb.collection('family_members').update(link.id, {
+                status: 'active'
+            })
+
             setMsg('¡Invitación aceptada! 🎉')
             loadPendingInvitations()
             setTimeout(() => window.location.reload(), 1500)
-        }
-    }
-
-    async function onEnablePush() {
-        if (!VAPID_PUBLIC_KEY) {
-            setErr('Notificaciones push no configuradas')
-            return
-        }
-        setPushLoading(true)
-        setErr(null)
-        try {
-            const permission = await Notification.requestPermission()
-            if (permission !== 'granted') {
-                setErr('Permiso de notificaciones denegado')
-                setPushLoading(false)
-                return
-            }
-            const reg = await navigator.serviceWorker.ready
-            const sub = await reg.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-            })
-            const { error } = await supabase.functions.invoke('push_register', {
-                body: { subscription: sub.toJSON(), family_id: activeFamilyId }
-            })
-            if (error) throw error
-            setPushEnabled(true)
-            setMsg('¡Notificaciones activadas! 🔔')
         } catch (e: any) {
-            // More descriptive error for push registration failures
-            const errorMsg = e?.message || String(e)
-            if (errorMsg.includes('push service')) {
-                setErr('Error del servicio push. Asegúrate de estar en un navegador compatible (Chrome, Firefox, Edge).')
-            } else {
-                setErr(errorMsg)
-            }
-        } finally {
-            setPushLoading(false)
+            setErr(e.message)
         }
     }
 
-    // Role-based permissions
-    // Roles: owner > admin > adult > child
     const currentUserRole = families.find(f => f.family_id === activeFamilyId)?.role
     const isAdmin = currentUserRole === 'owner' || currentUserRole === 'admin'
 
@@ -211,19 +202,6 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {err && <p className="err">{err}</p>}
                 {msg && <p className="success-msg">{msg}</p>}
-
-                {/* Notificaciones - visible for all */}
-                <div className="card-inner">
-                    <h4>🔔 Notificaciones</h4>
-                    <button
-                        className={`btn ${pushEnabled ? 'btn-ghost' : 'btn-primary'}`}
-                        onClick={onEnablePush}
-                        disabled={pushLoading || pushEnabled}
-                        style={{ width: '100%' }}
-                    >
-                        {pushLoading ? 'Activando...' : pushEnabled ? '✓ Activadas' : 'Activar notificaciones'}
-                    </button>
-                </div>
 
                 {/* Familia activa - only for Admin */}
                 {isAdmin && (
@@ -356,7 +334,10 @@ export default function SettingsModal({ isOpen, onClose }: Props) {
                 <button
                     className="btn btn-ghost"
                     style={{ color: 'var(--danger)', width: '100%' }}
-                    onClick={() => supabase.auth.signOut()}
+                    onClick={() => {
+                        pb.authStore.clear()
+                        window.location.reload()
+                    }}
                 >
                     Cerrar sesión
                 </button>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { supabase } from './supabase'
+import { pb } from './pb'
 import { useSession } from './useSession'
 
 export type FamilyOption = {
@@ -39,24 +39,16 @@ export function useActiveFamily() {
         setError(null)
 
         try {
-          const { data, error } = await supabase
-            .from('family_members')
-            .select('family_id, role, member_id, families(name)')
-            .eq('auth_user_id', session.user.id)
-            .eq('status', 'active')
+          const records = await pb.collection('family_members').getFullList({
+            filter: `auth_user_id = "${session.user.id}" && status = "active"`,
+            expand: 'family'
+          })
 
-          if (error) {
-            setError(error.message)
-            setFamilies([])
-            setLoading(false)
-            return
-          }
-
-          const opts: FamilyOption[] = (data ?? []).map((r: any) => ({
-            family_id: r.family_id,
+          const opts: FamilyOption[] = records.map((r: any) => ({
+            family_id: r.family,
             role: r.role,
-            member_id: r.member_id,
-            name: r.families?.name ?? 'Familia'
+            member_id: r.member,
+            name: r.expand?.family?.name ?? 'Familia'
           }))
 
           setFamilies(opts)
@@ -68,7 +60,8 @@ export function useActiveFamily() {
             setActiveFamilyId(opts[0].family_id)
             localStorage.setItem(LS_KEY, opts[0].family_id)
           }
-        } catch (e) {
+        } catch (e: any) {
+          setError(e.message)
           console.error('Error loading families:', e)
         } finally {
           setLoading(false)
@@ -88,17 +81,12 @@ export function useActiveFamily() {
 
       ; (async () => {
         try {
-          // Robust query: no avatar_url
-          const { data, error } = await supabase
-            .from('members')
-            .select('id, display_name')
-            .eq('id', activeOpt.member_id)
-            .single()
+          const record = await pb.collection('members').getOne(activeOpt.member_id)
 
-          if (!error && data) {
+          if (record) {
             setMyMember({
-              id: data.id,
-              display_name: data.display_name,
+              id: record.id,
+              display_name: record.display_name,
               avatar_url: null,
               role: activeOpt.role
             })

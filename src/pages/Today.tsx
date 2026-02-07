@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import { useFamilyMembers, FamilyMember } from '../lib/useFamilyMembers'
 import { useSession } from '../lib/useSession'
@@ -8,7 +8,7 @@ import EditEventModal from '../components/EditEventModal'
 import EditTaskModal from '../components/EditTaskModal'
 
 type EventRow = { id: string; title: string; starts_at: string; ends_at: string; location: string | null; status: string; all_day: boolean }
-type TaskRow = { id: string; title: string; status: string; due_at: string | null; priority: number; assignee_member_id: string | null }
+type TaskRow = { id: string; title: string; status: string; due_at: string | null; priority: number; assignee: string | null }
 type BillRow = { id: string; name: string; amount_cents: number; next_due_at: string; currency: string }
 
 function startOfDay(d: Date) {
@@ -49,6 +49,10 @@ function formatCurrency(cents: number, currency: string) {
   return new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(cents / 100)
 }
 
+function toPBDate(iso: string) {
+  return iso.replace('T', ' ').split('.')[0]
+}
+
 export default function TodayPage() {
   const { session } = useSession()
   const { activeFamilyId, families, loading: famLoading } = useActiveFamily()
@@ -68,61 +72,47 @@ export default function TodayPage() {
     const s = startOfDay(new Date())
     const e = new Date(s)
     e.setDate(e.getDate() + 1)
-    return { start: s.toISOString(), end: e.toISOString() }
+    return { start: toPBDate(s.toISOString()), end: toPBDate(e.toISOString()) }
   }, [])
 
   async function loadData() {
     if (!activeFamilyId) return
     setErr(null)
 
-    const { data: ev, error: eErr } = await supabase
-      .from('events')
-      .select('id,title,starts_at,ends_at,location,status,all_day')
-      .eq('family_id', activeFamilyId)
-      .lt('starts_at', range.end)
-      .gt('ends_at', range.start)
-      .order('starts_at', { ascending: true })
-      .limit(50)
-    if (eErr) setErr(eErr.message)
-    else setEvents((ev as any) ?? [])
+    try {
+      const ev = await pb.collection('events').getList<EventRow>(1, 50, {
+        filter: `family = "${activeFamilyId}" && starts_at < "${range.end}" && ends_at > "${range.start}"`,
+        sort: 'starts_at'
+      })
+      setEvents(ev.items)
 
-    const { data: ts, error: tErr } = await supabase
-      .from('tasks')
-      .select('id,title,status,due_at,priority,assignee_member_id')
-      .eq('family_id', activeFamilyId)
-      .neq('status', 'done')
-      .neq('status', 'archived')
-      .order('priority', { ascending: true })
-      .order('due_at', { ascending: true, nullsFirst: false })
-      .limit(20)
-    if (tErr) setErr(tErr.message)
-    else setTasks((ts as any) ?? [])
+      const ts = await pb.collection('tasks').getList<TaskRow>(1, 20, {
+        filter: `family = "${activeFamilyId}" && status != "done" && status != "archived"`,
+        sort: 'priority,due_at'
+      })
+      setTasks(ts.items)
 
-    const { count: shopCount } = await supabase
-      .from('shopping_items')
-      .select('*', { count: 'exact', head: true })
-      .eq('family_id', activeFamilyId)
-      .eq('status', 'open')
-    setShoppingOpen(shopCount ?? 0)
+      const shopCount = await pb.collection('shopping_items').getList(1, 1, {
+        filter: `family = "${activeFamilyId}" && status = "open"`,
+        requestKey: 'shopCount'
+      })
+      setShoppingOpen(shopCount.totalItems)
 
-    const { count: cCount } = await supabase
-      .from('event_conflicts')
-      .select('*', { count: 'exact', head: true })
-      .eq('family_id', activeFamilyId)
-      .gte('overlap_start', range.start)
-      .lt('overlap_start', range.end)
-    setConflicts(cCount ?? 0)
+      const cCount = await pb.collection('event_conflicts').getList(1, 1, {
+        filter: `family = "${activeFamilyId}" && overlap_start >= "${range.start}" && overlap_start < "${range.end}"`,
+        requestKey: 'conflictsCount'
+      })
+      setConflicts(cCount.totalItems)
 
-    const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    const { data: billsData } = await supabase
-      .from('recurring_bills')
-      .select('id,name,amount_cents,next_due_at,currency')
-      .eq('family_id', activeFamilyId)
-      .eq('is_active', true)
-      .lte('next_due_at', weekFromNow)
-      .order('next_due_at', { ascending: true })
-      .limit(10)
-    setBills((billsData as any) ?? [])
+      const weekFromNow = toPBDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString())
+      const billsData = await pb.collection('recurring_bills').getList<BillRow>(1, 10, {
+        filter: `family = "${activeFamilyId}" && is_active = true && next_due_at <= "${weekFromNow}"`,
+        sort: 'next_due_at'
+      })
+      setBills(billsData.items)
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   useEffect(() => { loadData() }, [activeFamilyId, range.end, range.start])
@@ -239,7 +229,7 @@ export default function TodayPage() {
             </div>
           )}
           {tasks.slice(0, 8).map((t) => {
-            const assigneeName = getMemberName(members, t.assignee_member_id)
+            const assigneeName = getMemberName(members, t.assignee)
             return (
               <div
                 key={t.id}

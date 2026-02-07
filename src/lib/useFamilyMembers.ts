@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase } from './supabase'
+import { pb } from './pb'
 import { useActiveFamily } from './useActiveFamily'
 
 export type FamilyMember = {
@@ -24,17 +24,25 @@ export function useFamilyMembers() {
         }
 
         setLoading(true)
-        supabase
-            .rpc('list_family_members', { p_family_id: activeFamilyId })
-            .then(({ data, error }) => {
-                if (error) {
-                    console.warn('useFamilyMembers:', error.message)
-                    setMembers([])
-                } else {
-                    setMembers(Array.isArray(data) ? data : [])
-                }
-                setLoading(false)
-            })
+        pb.collection('family_members').getFullList({
+            filter: `family = "${activeFamilyId}"`,
+            expand: 'member'
+        }).then((records) => {
+            const mapped: FamilyMember[] = records.map((r: any) => ({
+                member_id: r.member,
+                display_name: r.expand?.member?.display_name ?? 'Miembro',
+                role: r.role,
+                status: r.status,
+                auth_email: r.expand?.member?.email ?? null,
+                gender: r.expand?.member?.gender ?? null
+            }))
+            setMembers(mapped)
+            setLoading(false)
+        }).catch(err => {
+            console.warn('useFamilyMembers:', err.message)
+            setMembers([])
+            setLoading(false)
+        })
     }, [activeFamilyId])
 
     return { members, loading }

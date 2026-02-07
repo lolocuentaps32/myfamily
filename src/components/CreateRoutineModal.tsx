@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 
 interface Props {
     isOpen: boolean
@@ -22,13 +22,12 @@ export default function CreateRoutineModal({ isOpen, onClose, familyId, onCreate
         setBusy(true)
         setErr(null)
         try {
-            const { error } = await supabase.from('routines').insert({
-                family_id: familyId,
+            await pb.collection('routines').create({
+                family: familyId,
                 name: name.trim(),
                 context: context.trim() || null,
                 is_active: true
             })
-            if (error) throw error
 
             // Reset
             setName('')

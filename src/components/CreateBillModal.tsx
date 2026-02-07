@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 
 interface Props {
     isOpen: boolean
     onClose: () => void
     familyId: string | null
     onCreated?: () => void
+}
+
+function toPBDate(iso: string) {
+    return iso.replace('T', ' ').split('.')[0]
 }
 
 export default function CreateBillModal({ isOpen, onClose, familyId, onCreated }: Props) {
@@ -24,16 +28,14 @@ export default function CreateBillModal({ isOpen, onClose, familyId, onCreated }
         setErr(null)
         try {
             const cents = Math.round(parseFloat(amount) * 100)
-            const { error } = await supabase.from('recurring_bills').insert({
-                family_id: familyId,
+            await pb.collection('recurring_bills').create({
+                family: familyId,
                 name: name.trim(),
                 amount_cents: cents,
                 currency: 'EUR',
-                next_due_at: new Date(dueDate).toISOString(),
-                frequency: 'monthly',
+                next_due_at: toPBDate(new Date(dueDate).toISOString()),
                 is_active: true
             })
-            if (error) throw error
 
             // Reset
             setName('')

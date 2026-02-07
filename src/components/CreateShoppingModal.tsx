@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 
 interface Props {
     isOpen: boolean
@@ -16,7 +16,7 @@ const categories = [
 
 export default function CreateShoppingModal({ isOpen, onClose, familyId, onCreated }: Props) {
     const [title, setTitle] = useState('')
-    const [qty, setQty] = useState(1)
+    const [qty, setQty] = useState('1')
     const [category, setCategory] = useState('')
     const [busy, setBusy] = useState(false)
     const [err, setErr] = useState<string | null>(null)
@@ -28,18 +28,17 @@ export default function CreateShoppingModal({ isOpen, onClose, familyId, onCreat
         setBusy(true)
         setErr(null)
         try {
-            const { error } = await supabase.from('shopping_items').insert({
-                family_id: familyId,
+            await pb.collection('shopping_items').create({
+                family: familyId,
                 title: title.trim(),
                 quantity: qty,
                 category: category || null,
                 status: 'open'
             })
-            if (error) throw error
 
             // Reset
             setTitle('')
-            setQty(1)
+            setQty('1')
             setCategory('')
             onCreated?.()
             onClose()
@@ -66,10 +65,9 @@ export default function CreateShoppingModal({ isOpen, onClose, familyId, onCreat
 
                 <label style={{ marginTop: 12 }}>Cantidad</label>
                 <input
-                    type="number"
-                    min={1}
+                    type="text"
                     value={qty}
-                    onChange={(e) => setQty(Number(e.target.value))}
+                    onChange={(e) => setQty(e.target.value)}
                 />
 
                 <label style={{ marginTop: 12 }}>Categoría</label>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import Modal from './Modal'
 import ConfirmModal from './ConfirmModal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 
 const CATEGORIES = [
     { value: '', label: '📦 Sin categoría' },
@@ -18,7 +18,7 @@ const CATEGORIES = [
 interface ShoppingData {
     id: string
     title: string
-    quantity: number
+    quantity: string
     category: string | null
     status: string
 }
@@ -32,7 +32,7 @@ interface Props {
 
 export default function EditShoppingModal({ isOpen, onClose, item, onUpdated }: Props) {
     const [title, setTitle] = useState('')
-    const [qty, setQty] = useState(1)
+    const [qty, setQty] = useState('1')
     const [category, setCategory] = useState('')
     const [status, setStatus] = useState('open')
     const [busy, setBusy] = useState(false)
@@ -42,7 +42,7 @@ export default function EditShoppingModal({ isOpen, onClose, item, onUpdated }: 
     useEffect(() => {
         if (item) {
             setTitle(item.title)
-            setQty(item.quantity)
+            setQty(String(item.quantity))
             setCategory(item.category || '')
             setStatus(item.status)
         }
@@ -55,13 +55,12 @@ export default function EditShoppingModal({ isOpen, onClose, item, onUpdated }: 
         setBusy(true)
         setErr(null)
         try {
-            const { error } = await supabase.from('shopping_items').update({
+            await pb.collection('shopping_items').update(item.id, {
                 title: title.trim(),
                 quantity: qty,
                 category: category || null,
                 status
-            }).eq('id', item.id)
-            if (error) throw error
+            })
 
             onUpdated?.()
             onClose()
@@ -77,8 +76,7 @@ export default function EditShoppingModal({ isOpen, onClose, item, onUpdated }: 
         setBusy(true)
         setShowDeleteConfirm(false)
         try {
-            const { error } = await supabase.from('shopping_items').delete().eq('id', item.id)
-            if (error) throw error
+            await pb.collection('shopping_items').delete(item.id)
             onUpdated?.()
             onClose()
         } catch (e: any) {
@@ -104,10 +102,9 @@ export default function EditShoppingModal({ isOpen, onClose, item, onUpdated }: 
 
                     <label style={{ marginTop: 12 }}>Cantidad</label>
                     <input
-                        type="number"
-                        min={1}
+                        type="text"
                         value={qty}
-                        onChange={(e) => setQty(Number(e.target.value))}
+                        onChange={(e) => setQty(e.target.value)}
                     />
 
                     <label style={{ marginTop: 12 }}>Categoría</label>

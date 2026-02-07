@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useSession } from '../lib/useSession'
 
 export default function LoginPage() {
@@ -8,7 +8,6 @@ export default function LoginPage() {
   const nav = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [mode, setMode] = useState<'otp' | 'password'>('otp')
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -17,7 +16,7 @@ export default function LoginPage() {
     if (!loading && session) nav('/')
   }, [loading, session, nav])
 
-  const canSubmit = useMemo(() => email.trim().includes('@') && (mode === 'otp' || password.length >= 6), [email, password, mode])
+  const canSubmit = useMemo(() => email.trim().includes('@') && password.length >= 6, [email, password])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -25,23 +24,10 @@ export default function LoginPage() {
     setErr(null)
     setMsg(null)
     try {
-      if (mode === 'otp') {
-        const { error } = await supabase.auth.signInWithOtp({
-          email: email.trim(),
-          options: { emailRedirectTo: window.location.origin }
-        })
-        if (error) throw error
-        setMsg('¡Listo! Te hemos enviado un enlace mágico a tu email ✨')
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password
-        })
-        if (error) throw error
-        setMsg('¡Bienvenido de nuevo! 🎉')
-      }
+      await pb.collection('users').authWithPassword(email.trim(), password)
+      setMsg('¡Bienvenido de nuevo! 🎉')
     } catch (e: any) {
-      setErr(e?.message ?? 'Ups, algo salió mal')
+      setErr(e?.message ?? 'Email o contraseña incorrectos')
     } finally {
       setBusy(false)
     }
@@ -56,24 +42,7 @@ export default function LoginPage() {
           Tu espacio familiar organizado
         </p>
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
-          <button
-            type="button"
-            className={`btn ${mode === 'otp' ? '' : 'btn-ghost'}`}
-            onClick={() => setMode('otp')}
-          >
-            ✨ Enlace mágico
-          </button>
-          <button
-            type="button"
-            className={`btn ${mode === 'password' ? '' : 'btn-ghost'}`}
-            onClick={() => setMode('password')}
-          >
-            🔑 Contraseña
-          </button>
-        </div>
-
-        <form onSubmit={onSubmit} style={{ textAlign: 'left' }}>
+        <form onSubmit={onSubmit} style={{ textAlign: 'left', marginTop: 32 }}>
           <label>Email</label>
           <input
             className="input"
@@ -83,23 +52,21 @@ export default function LoginPage() {
             autoComplete="email"
           />
 
-          {mode === 'password' && (
-            <div style={{ marginTop: 16 }}>
-              <label>Contraseña</label>
-              <input
-                className="input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                type="password"
-                autoComplete="current-password"
-              />
-            </div>
-          )}
+          <div style={{ marginTop: 16 }}>
+            <label>Contraseña</label>
+            <input
+              className="input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              type="password"
+              autoComplete="current-password"
+            />
+          </div>
 
-          <div style={{ marginTop: 20 }}>
+          <div style={{ marginTop: 24 }}>
             <button className="btn" style={{ width: '100%' }} disabled={!canSubmit || busy}>
-              {busy ? 'Un momento...' : mode === 'otp' ? 'Enviar enlace mágico' : 'Entrar'}
+              {busy ? 'Un momento...' : 'Entrar'}
             </button>
           </div>
 

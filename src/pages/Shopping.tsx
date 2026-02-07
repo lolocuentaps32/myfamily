@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import EditShoppingModal from '../components/EditShoppingModal'
 
-type ItemRow = { id: string; title: string; quantity: number; category: string | null; status: string }
+type ItemRow = { id: string; title: string; quantity: string; category: string | null; status: string }
 
 const CATEGORIES = [
   { value: '', label: '📦 Sin categoría' },
@@ -32,16 +32,15 @@ export default function ShoppingPage() {
   async function load() {
     if (!activeFamilyId) return
     setErr(null)
-    const { data, error } = await supabase
-      .from('shopping_items')
-      .select('id,title,quantity,category,status')
-      .eq('family_id', activeFamilyId)
-      .order('status', { ascending: true })
-      .order('category', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: false })
-      .limit(300)
-    if (error) setErr(error.message)
-    else setItems((data as any) ?? [])
+    try {
+      const records = await pb.collection('shopping_items').getList<ItemRow>(1, 300, {
+        filter: `family = "${activeFamilyId}"`,
+        sort: 'status,category,-created'
+      })
+      setItems(records.items)
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   useEffect(() => { load() }, [activeFamilyId])
@@ -49,9 +48,12 @@ export default function ShoppingPage() {
   async function toggleDone(e: React.MouseEvent, it: ItemRow) {
     e.stopPropagation()
     const next = it.status === 'purchased' ? 'open' : 'purchased'
-    const { error } = await supabase.from('shopping_items').update({ status: next }).eq('id', it.id)
-    if (error) setErr(error.message)
-    else load()
+    try {
+      await pb.collection('shopping_items').update(it.id, { status: next })
+      load()
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   const openItems = items.filter(i => i.status !== 'purchased')
@@ -110,7 +112,7 @@ export default function ShoppingPage() {
                     <div>
                       <div className="item-title">
                         {it.title}
-                        {it.quantity > 1 && <span className="muted" style={{ marginLeft: 8 }}>×{it.quantity}</span>}
+                        {it.quantity && it.quantity !== '1' && <span className="muted" style={{ marginLeft: 8 }}>×{it.quantity}</span>}
                       </div>
                     </div>
                   </div>
@@ -142,7 +144,7 @@ export default function ShoppingPage() {
                     <div>
                       <div className="item-title">
                         {it.title}
-                        {it.quantity > 1 && <span className="muted" style={{ marginLeft: 8 }}>×{it.quantity}</span>}
+                        {it.quantity && it.quantity !== '1' && <span className="muted" style={{ marginLeft: 8 }}>×{it.quantity}</span>}
                       </div>
                     </div>
                   </div>

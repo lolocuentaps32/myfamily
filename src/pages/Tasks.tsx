@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import { useFamilyMembers, FamilyMember } from '../lib/useFamilyMembers'
 import { getGenderEmoji } from '../lib/memberUtils'
@@ -11,7 +11,7 @@ type TaskRow = {
   status: string
   due_at: string | null
   priority: number
-  assignee_member_id: string | null
+  assignee: string | null
 }
 
 const PRIORITY_OPTIONS = [
@@ -38,17 +38,15 @@ export default function TasksPage() {
   async function load() {
     if (!activeFamilyId) return
     setErr(null)
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('id,title,status,due_at,priority,assignee_member_id')
-      .eq('family_id', activeFamilyId)
-      .neq('status', 'archived')
-      .order('status', { ascending: true })
-      .order('priority', { ascending: true })
-      .order('due_at', { ascending: true, nullsFirst: false })
-      .limit(200)
-    if (error) setErr(error.message)
-    else setItems((data as any) ?? [])
+    try {
+      const records = await pb.collection('tasks').getList<TaskRow>(1, 200, {
+        filter: `family = "${activeFamilyId}" && status != "archived"`,
+        sort: 'status,priority,due_at'
+      })
+      setItems(records.items)
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   useEffect(() => { load() }, [activeFamilyId])
@@ -56,9 +54,12 @@ export default function TasksPage() {
   async function toggleDone(e: React.MouseEvent, t: TaskRow) {
     e.stopPropagation()
     const nextStatus = t.status === 'done' ? 'today' : 'done'
-    const { error } = await supabase.from('tasks').update({ status: nextStatus }).eq('id', t.id)
-    if (error) setErr(error.message)
-    else load()
+    try {
+      await pb.collection('tasks').update(t.id, { status: nextStatus })
+      load()
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   const pendingTasks = items.filter(t => t.status !== 'done')
@@ -82,7 +83,7 @@ export default function TasksPage() {
             </div>
           )}
           {pendingTasks.map((t) => {
-            const assigneeName = getMemberName(members, t.assignee_member_id)
+            const assigneeName = getMemberName(members, t.assignee)
             const priorityInfo = PRIORITY_OPTIONS.find(p => p.value === t.priority)
             return (
               <div

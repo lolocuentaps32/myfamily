@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import Modal from './Modal'
 import ConfirmModal from './ConfirmModal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { isoLocalToUtc } from '../lib/dateUtils'
 
 interface EventData {
@@ -28,6 +28,10 @@ function toLocalInputValue(isoString: string, allDay: boolean): string {
     }
     const pad = (n: number) => n.toString().padStart(2, '0')
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function toPBDate(iso: string) {
+    return iso.replace('T', ' ').split('.')[0]
 }
 
 export default function EditEventModal({ isOpen, onClose, event, onUpdated }: Props) {
@@ -61,21 +65,20 @@ export default function EditEventModal({ isOpen, onClose, event, onUpdated }: Pr
         setErr(null)
         try {
             const startsAt = allDay
-                ? new Date(start + 'T00:00:00').toISOString()
-                : isoLocalToUtc(start)
+                ? toPBDate(new Date(start + 'T00:00:00').toISOString())
+                : toPBDate(isoLocalToUtc(start))
             const endsAt = allDay
-                ? new Date(start + 'T23:59:59').toISOString()
-                : isoLocalToUtc(end)
+                ? toPBDate(new Date(start + 'T23:59:59').toISOString())
+                : toPBDate(isoLocalToUtc(end))
 
-            const { error } = await supabase.from('events').update({
+            await pb.collection('events').update(event.id, {
                 title: title.trim(),
                 starts_at: startsAt,
                 ends_at: endsAt,
                 location: location.trim() || null,
                 all_day: allDay,
                 status
-            }).eq('id', event.id)
-            if (error) throw error
+            })
 
             onUpdated?.()
             onClose()
@@ -91,8 +94,7 @@ export default function EditEventModal({ isOpen, onClose, event, onUpdated }: Pr
         setBusy(true)
         setShowDeleteConfirm(false)
         try {
-            const { error } = await supabase.from('events').delete().eq('id', event.id)
-            if (error) throw error
+            await pb.collection('events').delete(event.id)
             onUpdated?.()
             onClose()
         } catch (e: any) {

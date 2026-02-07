@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import Modal from './Modal'
+import { useActiveFamily } from '../lib/useActiveFamily'
 
 interface Props {
     isOpen: boolean
@@ -10,51 +11,47 @@ interface Props {
 }
 
 export default function CreatePointsModal({ isOpen, onClose, familyId, onCreated }: Props) {
+    const { myMember } = useActiveFamily()
     const [loading, setLoading] = useState(false)
     const [memberId, setMemberId] = useState('')
     const [points, setPoints] = useState(1)
     const [reason, setReason] = useState('')
-    const [members, setMembers] = useState<{ id: string; display_name: string }[]>([])
+    const [membersList, setMembersList] = useState<{ id: string; display_name: string }[]>([])
 
     async function loadMembers() {
         if (!familyId) return
-        const { data } = await supabase
-            .from('members')
-            .select('id, display_name')
-            .eq('family_id', familyId)
-        if (data) setMembers(data)
+        try {
+            const records = await pb.collection('family_members').getFullList({
+                filter: `family = "${familyId}"`,
+                expand: 'member'
+            })
+            setMembersList(records.map((r: any) => ({
+                id: r.member,
+                display_name: r.expand?.member?.display_name ?? 'Miembro'
+            })))
+        } catch { }
     }
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
-        if (!familyId || !memberId || !reason.trim()) return
+        if (!familyId || !memberId || !reason.trim() || !myMember) return
 
         setLoading(true)
 
-        // Get my member ID
-        const { data: myData } = await supabase
-            .from('family_members')
-            .select('member_id')
-            .eq('family_id', familyId)
-            .eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id)
-            .single()
+        try {
+            await pb.collection('reward_points').create({
+                family: familyId,
+                member: memberId,
+                points,
+                reason: reason.trim(),
+                creator: myMember.id
+            })
 
-        const { error } = await supabase.from('reward_points').insert({
-            family_id: familyId,
-            member_id: memberId,
-            points,
-            reason: reason.trim(),
-            created_by_member_id: myData?.member_id
-        })
-
-        setLoading(false)
-
-        if (!error) {
             // Create feed post
-            const member = members.find(m => m.id === memberId)
-            await supabase.from('family_feed').insert({
-                family_id: familyId,
-                author_member_id: memberId,
+            const member = membersList.find(m => m.id === memberId)
+            await pb.collection('family_feed').create({
+                family: familyId,
+                author: myMember.id,
                 content: `${points >= 0 ? '🎉' : '😔'} ${member?.display_name || 'Miembro'} ${points >= 0 ? 'ganó' : 'perdió'} ${Math.abs(points)} punto${Math.abs(points) !== 1 ? 's' : ''}: ${reason.trim()}`
             })
 
@@ -63,6 +60,8 @@ export default function CreatePointsModal({ isOpen, onClose, familyId, onCreated
             setReason('')
             onClose()
             onCreated?.()
+        } catch { } finally {
+            setLoading(false)
         }
     }
 
@@ -78,7 +77,7 @@ export default function CreatePointsModal({ isOpen, onClose, familyId, onCreated
                         onFocus={loadMembers}
                     >
                         <option value="">Selecciona un miembro</option>
-                        {members.map(m => (
+                        {membersList.map(m => (
                             <option key={m.id} value={m.id}>{m.display_name}</option>
                         ))}
                     </select>

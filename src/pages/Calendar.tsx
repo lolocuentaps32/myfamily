@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import EditEventModal from '../components/EditEventModal'
 
@@ -22,25 +22,28 @@ export default function CalendarPage() {
   async function load() {
     if (!activeFamilyId) return
     setErr(null)
-    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const { data, error } = await supabase
-      .from('events')
-      .select('id,title,starts_at,ends_at,location,status,all_day')
-      .eq('family_id', activeFamilyId)
-      .gte('ends_at', from)
-      .order('starts_at', { ascending: true })
-      .limit(100)
-    if (error) setErr(error.message)
-    else setItems((data as any) ?? [])
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ')
+    try {
+      const records = await pb.collection('events').getList<EventRow>(1, 100, {
+        filter: `family = "${activeFamilyId}" && ends_at >= "${from}"`,
+        sort: 'starts_at'
+      })
+      setItems(records.items)
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   useEffect(() => { load() }, [activeFamilyId])
 
   async function updateEventStatus(e: React.ChangeEvent<HTMLSelectElement>, id: string) {
     e.stopPropagation()
-    const { error } = await supabase.from('events').update({ status: e.target.value }).eq('id', id)
-    if (error) setErr(error.message)
-    else load()
+    try {
+      await pb.collection('events').update(id, { status: e.target.value })
+      load()
+    } catch (e: any) {
+      setErr(e.message)
+    }
   }
 
   return (

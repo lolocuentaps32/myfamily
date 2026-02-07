@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import Modal from './Modal'
+import { useActiveFamily } from '../lib/useActiveFamily'
 
 interface Props {
     isOpen: boolean
@@ -12,6 +13,7 @@ interface Props {
 const ICONS = ['⭐', '🎯', '📚', '🧹', '🏃', '🎨', '🎵', '💪', '🧘', '🍎', '💤', '🦷']
 
 export default function CreateGoalModal({ isOpen, onClose, familyId, onCreated }: Props) {
+    const { myMember } = useActiveFamily()
     const [loading, setLoading] = useState(false)
     const [title, setTitle] = useState('')
     const [description, setDescription] = useState('')
@@ -21,32 +23,22 @@ export default function CreateGoalModal({ isOpen, onClose, familyId, onCreated }
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
-        if (!familyId || !title.trim()) return
+        if (!familyId || !title.trim() || !myMember) return
 
         setLoading(true)
 
-        // Get my member ID
-        const { data: myData } = await supabase
-            .from('family_members')
-            .select('member_id')
-            .eq('family_id', familyId)
-            .eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id)
-            .single()
+        try {
+            await pb.collection('reward_goals').create({
+                family: familyId,
+                title: title.trim(),
+                description: description.trim() || null,
+                points,
+                icon,
+                is_recurring: isRecurring,
+                is_active: true,
+                creator: myMember.id
+            })
 
-        const { error } = await supabase.from('reward_goals').insert({
-            family_id: familyId,
-            title: title.trim(),
-            description: description.trim() || null,
-            points,
-            icon,
-            is_recurring: isRecurring,
-            is_active: true,
-            created_by_member_id: myData?.member_id
-        })
-
-        setLoading(false)
-
-        if (!error) {
             setTitle('')
             setDescription('')
             setPoints(1)
@@ -54,6 +46,8 @@ export default function CreateGoalModal({ isOpen, onClose, familyId, onCreated }
             setIsRecurring(false)
             onClose()
             onCreated?.()
+        } catch { } finally {
+            setLoading(false)
         }
     }
 

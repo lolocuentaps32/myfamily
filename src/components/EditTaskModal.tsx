@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import Modal from './Modal'
 import ConfirmModal from './ConfirmModal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useFamilyMembers } from '../lib/useFamilyMembers'
 
 interface TaskData {
@@ -10,7 +10,7 @@ interface TaskData {
     status: string
     due_at: string | null
     priority: number
-    assignee_member_id: string | null
+    assignee: string | null
 }
 
 interface Props {
@@ -35,9 +35,9 @@ export default function EditTaskModal({ isOpen, onClose, task, familyId, onUpdat
     useEffect(() => {
         if (task) {
             setTitle(task.title)
-            setDue(task.due_at ? task.due_at.split('T')[0] : '')
+            setDue(task.due_at ? task.due_at.split(' ')[0] : '')
             setPriority(task.priority)
-            setAssignee(task.assignee_member_id || '')
+            setAssignee(task.assignee || '')
             setStatus(task.status)
         }
     }, [task])
@@ -53,12 +53,11 @@ export default function EditTaskModal({ isOpen, onClose, task, familyId, onUpdat
                 title: title.trim(),
                 priority,
                 status,
-                assignee_member_id: assignee || null,
-                due_at: due ? new Date(due).toISOString() : null
+                assignee: assignee || null,
+                due_at: due ? new Date(due).toISOString().replace('T', ' ').split('.')[0] : null
             }
 
-            const { error } = await supabase.from('tasks').update(payload).eq('id', task.id)
-            if (error) throw error
+            await pb.collection('tasks').update(task.id, payload)
 
             onUpdated?.()
             onClose()
@@ -74,8 +73,7 @@ export default function EditTaskModal({ isOpen, onClose, task, familyId, onUpdat
         setBusy(true)
         setShowDeleteConfirm(false)
         try {
-            const { error } = await supabase.from('tasks').delete().eq('id', task.id)
-            if (error) throw error
+            await pb.collection('tasks').delete(task.id)
             onUpdated?.()
             onClose()
         } catch (e: any) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import { useNavigate } from 'react-router-dom'
 import './More.css'
@@ -22,7 +22,7 @@ type BillRow = {
 type ShoppingItem = {
   id: string
   title: string
-  quantity: number
+  quantity: string
   status: string
 }
 
@@ -50,37 +50,35 @@ export default function MorePage() {
 
   async function loadRoutines() {
     if (!activeFamilyId) return
-    const { data } = await supabase
-      .from('routines')
-      .select('id,name,context,is_active')
-      .eq('family_id', activeFamilyId)
-      .order('name')
-      .limit(50)
-    if (data) setRoutines(data as any)
+    try {
+      const records = await pb.collection('routines').getList<RoutineRow>(1, 50, {
+        filter: `family = "${activeFamilyId}"`,
+        sort: 'name'
+      })
+      setRoutines(records.items)
+    } catch (e) { }
   }
 
   async function loadBills() {
     if (!activeFamilyId) return
-    const { data } = await supabase
-      .from('recurring_bills')
-      .select('id,name,amount_cents,next_due_at,currency')
-      .eq('family_id', activeFamilyId)
-      .eq('is_active', true)
-      .order('next_due_at')
-      .limit(50)
-    if (data) setBills(data as any)
+    try {
+      const records = await pb.collection('recurring_bills').getList<BillRow>(1, 50, {
+        filter: `family = "${activeFamilyId}" && is_active = true`,
+        sort: 'next_due_at'
+      })
+      setBills(records.items)
+    } catch (e) { }
   }
 
   async function loadShopping() {
     if (!activeFamilyId) return
-    const { data } = await supabase
-      .from('shopping_items')
-      .select('id,title,quantity,status')
-      .eq('family_id', activeFamilyId)
-      .neq('status', 'purchased')
-      .order('created_at', { ascending: false })
-      .limit(50)
-    if (data) setShoppingItems(data as any)
+    try {
+      const records = await pb.collection('shopping_items').getList<ShoppingItem>(1, 50, {
+        filter: `family = "${activeFamilyId}" && status != "purchased"`,
+        sort: '-created'
+      })
+      setShoppingItems(records.items)
+    } catch (e) { }
   }
 
   useEffect(() => {
@@ -90,20 +88,18 @@ export default function MorePage() {
   }, [activeFamilyId])
 
   async function toggleRoutine(r: RoutineRow) {
-    const { error } = await supabase
-      .from('routines')
-      .update({ is_active: !r.is_active })
-      .eq('id', r.id)
-    if (!error) loadRoutines()
+    try {
+      await pb.collection('routines').update(r.id, { is_active: !r.is_active })
+      loadRoutines()
+    } catch (e) { }
   }
 
   async function toggleShoppingDone(item: ShoppingItem) {
     const next = item.status === 'purchased' ? 'open' : 'purchased'
-    const { error } = await supabase
-      .from('shopping_items')
-      .update({ status: next })
-      .eq('id', item.id)
-    if (!error) loadShopping()
+    try {
+      await pb.collection('shopping_items').update(item.id, { status: next })
+      loadShopping()
+    } catch (e) { }
   }
 
   function getSectionCount(id: string) {
@@ -156,7 +152,7 @@ export default function MorePage() {
                       <div>
                         <div className="item-title">
                           {item.title}
-                          {item.quantity > 1 && <span className="muted" style={{ marginLeft: 8 }}>×{item.quantity}</span>}
+                          {item.quantity && item.quantity !== '1' && <span className="muted" style={{ marginLeft: 8 }}>×{item.quantity}</span>}
                         </div>
                       </div>
                       <button className="checkbox-btn" title="Marcar como comprado" />

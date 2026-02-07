@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import Modal from './Modal'
-import { supabase } from '../lib/supabase'
+import { pb } from '../lib/pb'
 import { useFamilyMembers } from '../lib/useFamilyMembers'
 
 interface Props {
@@ -8,6 +8,10 @@ interface Props {
     onClose: () => void
     familyId: string | null
     onCreated?: () => void
+}
+
+function toPBDate(iso: string) {
+    return iso.replace('T', ' ').split('.')[0]
 }
 
 export default function CreateTaskModal({ isOpen, onClose, familyId, onCreated }: Props) {
@@ -27,17 +31,16 @@ export default function CreateTaskModal({ isOpen, onClose, familyId, onCreated }
         setErr(null)
         try {
             const payload: any = {
-                family_id: familyId,
+                family: familyId,
                 title: title.trim(),
                 status: 'today',
                 visibility: 'family',
                 priority
             }
-            if (due) payload.due_at = new Date(due).toISOString()
-            if (assignee) payload.assignee_member_id = assignee
+            if (due) payload.due_at = toPBDate(new Date(due).toISOString())
+            if (assignee) payload.assignee = assignee
 
-            const { error } = await supabase.from('tasks').insert(payload)
-            if (error) throw error
+            await pb.collection('tasks').create(payload)
 
             // Reset
             setTitle('')
