@@ -5,7 +5,14 @@ import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import './styles/base.css'
 
-registerSW({ immediate: true })
+registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    if (confirm('Nueva versión disponible. ¿Recargar?')) {
+      window.location.reload()
+    }
+  }
+})
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
