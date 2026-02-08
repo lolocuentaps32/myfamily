@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { pb } from '../lib/pb'
 import { useActiveFamily } from '../lib/useActiveFamily'
 import { useFamilyMembers, FamilyMember } from '../lib/useFamilyMembers'
@@ -33,11 +33,16 @@ export default function TasksPage() {
   const { members } = useFamilyMembers()
   const [items, setItems] = useState<TaskRow[]>([])
   const [err, setErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const [editingTask, setEditingTask] = useState<TaskRow | null>(null)
 
   async function load() {
-    if (!activeFamilyId) return
+    if (!activeFamilyId) {
+      setLoading(false)
+      return
+    }
     setErr(null)
+    setLoading(true)
     try {
       const records = await pb.collection('tasks').getList<TaskRow>(1, 200, {
         filter: `family = "${activeFamilyId}" && status != "archived"`,
@@ -45,7 +50,10 @@ export default function TasksPage() {
       })
       setItems(records.items)
     } catch (e: any) {
+      console.error('Tasks load error:', e)
       setErr(e.message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -60,6 +68,14 @@ export default function TasksPage() {
     } catch (e: any) {
       setErr(e.message)
     }
+  }
+
+  if (!activeFamilyId) {
+    return <div className="page"><div className="loading-spinner">Cargando familia...</div></div>
+  }
+
+  if (loading) {
+    return <div className="page"><div className="loading-spinner">Cargando tareas...</div></div>
   }
 
   const pendingTasks = items.filter(t => t.status !== 'done')

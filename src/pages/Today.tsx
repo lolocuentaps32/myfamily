@@ -165,7 +165,7 @@ export default function TodayPage() {
       <div className="card">
         <h2>👋 Hola, {(() => {
           const currentMember = members.find(m => m.auth_email === session?.user.email)
-          return currentMember?.display_name ?? session?.user.email?.split('@')[0] ?? 'Usuario'
+          return session?.user?.name || currentMember?.display_name || session?.user?.email?.split('@')[0] || 'Usuario'
         })()}</h2>
 
         <div className="grid stats-compact">

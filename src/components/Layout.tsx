@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useActiveFamily } from '../lib/useActiveFamily'
+import { useSession } from '../lib/useSession'
 import AddMenu, { CreateType } from './AddMenu'
 import SettingsModal from './SettingsModal'
 import CreateEventModal from './CreateEventModal'
@@ -25,6 +26,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const loc = useLocation()
   const navigate = useNavigate()
   const { activeFamily, activeFamilyId } = useActiveFamily()
+  const { session } = useSession()
 
   // Modales
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -97,6 +99,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Modales */}
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
       <CreateEventModal isOpen={createEventOpen} onClose={() => setCreateEventOpen(false)} familyId={activeFamilyId} onCreated={handleCreated} />
       <CreateTaskModal isOpen={createTaskOpen} onClose={() => setCreateTaskOpen(false)} familyId={activeFamilyId} onCreated={handleCreated} />
       <CreateShoppingModal isOpen={createShoppingOpen} onClose={() => setCreateShoppingOpen(false)} familyId={activeFamilyId} onCreated={handleCreated} />

@@ -41,7 +41,8 @@ export function useActiveFamily() {
         try {
           const records = await pb.collection('family_members').getFullList({
             filter: `auth_user_id = "${session.user.id}" && status = "active"`,
-            expand: 'family'
+            expand: 'family',
+            requestKey: null // Disable auto-cancellation to prevent "request aborted" on double-render
           })
 
           const opts: FamilyOption[] = records.map((r: any) => ({
@@ -61,6 +62,7 @@ export function useActiveFamily() {
             localStorage.setItem(LS_KEY, opts[0].family_id)
           }
         } catch (e: any) {
+          if (e.isAbort) return // Ignore aborted requests
           setError(e.message)
           console.error('Error loading families:', e)
         } finally {
